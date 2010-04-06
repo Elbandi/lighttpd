@@ -4,7 +4,7 @@
 /* First off, code is include which follows the "include" declaration
 ** in the input file. */
 #include <stdio.h>
-#line 5 "../../src/configparser.y"
+#line 5 "./configparser.y"
 
 #include "configfile.h"
 #include "buffer.h"
@@ -518,42 +518,42 @@ static void yy_destructor(YYCODETYPE yymajor, YYMINORTYPE *yypminor){
     case 23:
     case 24:
     case 25:
-#line 144 "../../src/configparser.y"
+#line 144 "./configparser.y"
 { buffer_free((yypminor->yy0)); }
 #line 523 "configparser.c"
       break;
     case 35:
-#line 135 "../../src/configparser.y"
+#line 135 "./configparser.y"
 { (yypminor->yy41)->free((yypminor->yy41)); }
 #line 528 "configparser.c"
       break;
     case 36:
-#line 136 "../../src/configparser.y"
+#line 136 "./configparser.y"
 { (yypminor->yy41)->free((yypminor->yy41)); }
 #line 533 "configparser.c"
       break;
     case 37:
-#line 137 "../../src/configparser.y"
+#line 137 "./configparser.y"
 { (yypminor->yy41)->free((yypminor->yy41)); }
 #line 538 "configparser.c"
       break;
     case 39:
-#line 138 "../../src/configparser.y"
+#line 138 "./configparser.y"
 { array_free((yypminor->yy40)); }
 #line 543 "configparser.c"
       break;
     case 40:
-#line 139 "../../src/configparser.y"
+#line 139 "./configparser.y"
 { array_free((yypminor->yy40)); }
 #line 548 "configparser.c"
       break;
     case 41:
-#line 140 "../../src/configparser.y"
+#line 140 "./configparser.y"
 { buffer_free((yypminor->yy43)); }
 #line 553 "configparser.c"
       break;
     case 42:
-#line 141 "../../src/configparser.y"
+#line 141 "./configparser.y"
 { buffer_free((yypminor->yy43)); }
 #line 558 "configparser.c"
       break;
@@ -823,7 +823,7 @@ static void yy_reduce(
         /* No destructor defined for global */
         break;
       case 5:
-#line 117 "../../src/configparser.y"
+#line 117 "./configparser.y"
 { yymsp[-1].minor.yy78 = NULL; }
 #line 828 "configparser.c"
   yy_destructor(1,&yymsp[0].minor);
@@ -838,7 +838,7 @@ static void yy_reduce(
   yy_destructor(1,&yymsp[0].minor);
         break;
       case 9:
-#line 146 "../../src/configparser.y"
+#line 146 "./configparser.y"
 {
   if (ctx->ok) {
     buffer_copy_string_buffer(yymsp[0].minor.yy41->key, yymsp[-2].minor.yy43);
@@ -866,7 +866,7 @@ static void yy_reduce(
   yy_destructor(2,&yymsp[-1].minor);
         break;
       case 10:
-#line 170 "../../src/configparser.y"
+#line 170 "./configparser.y"
 {
   array *vars = ctx->current->value;
   data_unset *du;
@@ -909,7 +909,7 @@ static void yy_reduce(
   yy_destructor(3,&yymsp[-1].minor);
         break;
       case 11:
-#line 209 "../../src/configparser.y"
+#line 209 "./configparser.y"
 {
   if (strchr(yymsp[0].minor.yy0->ptr, '.') == NULL) {
     yygotominor.yy43 = buffer_init_string("var.");
@@ -924,7 +924,7 @@ static void yy_reduce(
 #line 924 "configparser.c"
         break;
       case 12:
-#line 221 "../../src/configparser.y"
+#line 221 "./configparser.y"
 {
   yygotominor.yy41 = configparser_merge_data(yymsp[-2].minor.yy41, yymsp[0].minor.yy41);
   if (NULL == yygotominor.yy41) {
@@ -938,7 +938,7 @@ static void yy_reduce(
   yy_destructor(5,&yymsp[-1].minor);
         break;
       case 13:
-#line 231 "../../src/configparser.y"
+#line 231 "./configparser.y"
 {
   yygotominor.yy41 = yymsp[0].minor.yy41;
   yymsp[0].minor.yy41 = NULL;
@@ -946,7 +946,7 @@ static void yy_reduce(
 #line 946 "configparser.c"
         break;
       case 14:
-#line 236 "../../src/configparser.y"
+#line 236 "./configparser.y"
 {
   yygotominor.yy41 = NULL;
   if (strncmp(yymsp[0].minor.yy43->ptr, "env.", sizeof("env.") - 1) == 0) {
@@ -976,7 +976,7 @@ static void yy_reduce(
 #line 976 "configparser.c"
         break;
       case 15:
-#line 263 "../../src/configparser.y"
+#line 263 "./configparser.y"
 {
   yygotominor.yy41 = (data_unset *)data_string_init();
   buffer_copy_string_buffer(((data_string *)(yygotominor.yy41))->value, yymsp[0].minor.yy0);
@@ -986,7 +986,7 @@ static void yy_reduce(
 #line 986 "configparser.c"
         break;
       case 16:
-#line 270 "../../src/configparser.y"
+#line 270 "./configparser.y"
 {
   yygotominor.yy41 = (data_unset *)data_integer_init();
   ((data_integer *)(yygotominor.yy41))->value = strtol(yymsp[0].minor.yy0->ptr, NULL, 10);
@@ -996,7 +996,7 @@ static void yy_reduce(
 #line 996 "configparser.c"
         break;
       case 17:
-#line 276 "../../src/configparser.y"
+#line 276 "./configparser.y"
 {
   yygotominor.yy41 = (data_unset *)data_array_init();
   array_free(((data_array *)(yygotominor.yy41))->value);
@@ -1006,7 +1006,7 @@ static void yy_reduce(
 #line 1006 "configparser.c"
         break;
       case 18:
-#line 282 "../../src/configparser.y"
+#line 282 "./configparser.y"
 {
   yygotominor.yy40 = array_init();
 }
@@ -1015,7 +1015,7 @@ static void yy_reduce(
   yy_destructor(9,&yymsp[0].minor);
         break;
       case 19:
-#line 285 "../../src/configparser.y"
+#line 285 "./configparser.y"
 {
   yygotominor.yy40 = yymsp[-1].minor.yy40;
   yymsp[-1].minor.yy40 = NULL;
@@ -1025,7 +1025,7 @@ static void yy_reduce(
   yy_destructor(9,&yymsp[0].minor);
         break;
       case 20:
-#line 290 "../../src/configparser.y"
+#line 290 "./configparser.y"
 {
   if (buffer_is_empty(yymsp[0].minor.yy41->key) ||
       NULL == array_get_element(yymsp[-2].minor.yy40, yymsp[0].minor.yy41->key->ptr)) {
@@ -1046,7 +1046,7 @@ static void yy_reduce(
   yy_destructor(10,&yymsp[-1].minor);
         break;
       case 21:
-#line 307 "../../src/configparser.y"
+#line 307 "./configparser.y"
 {
   yygotominor.yy40 = yymsp[-1].minor.yy40;
   yymsp[-1].minor.yy40 = NULL;
@@ -1055,7 +1055,7 @@ static void yy_reduce(
   yy_destructor(10,&yymsp[0].minor);
         break;
       case 22:
-#line 312 "../../src/configparser.y"
+#line 312 "./configparser.y"
 {
   yygotominor.yy40 = array_init();
   array_insert_unique(yygotominor.yy40, yymsp[0].minor.yy41);
@@ -1064,7 +1064,7 @@ static void yy_reduce(
 #line 1064 "configparser.c"
         break;
       case 23:
-#line 318 "../../src/configparser.y"
+#line 318 "./configparser.y"
 {
   yygotominor.yy41 = yymsp[0].minor.yy41;
   yymsp[0].minor.yy41 = NULL;
@@ -1072,7 +1072,7 @@ static void yy_reduce(
 #line 1072 "configparser.c"
         break;
       case 24:
-#line 322 "../../src/configparser.y"
+#line 322 "./configparser.y"
 {
   buffer_copy_string_buffer(yymsp[0].minor.yy41->key, yymsp[-2].minor.yy43);
   buffer_free(yymsp[-2].minor.yy43);
@@ -1090,7 +1090,7 @@ static void yy_reduce(
       case 26:
         break;
       case 27:
-#line 334 "../../src/configparser.y"
+#line 334 "./configparser.y"
 {
   data_config *dc;
   dc = (data_config *)array_get_element(ctx->srv->config_context, "global");
@@ -1101,7 +1101,7 @@ static void yy_reduce(
   yy_destructor(12,&yymsp[0].minor);
         break;
       case 28:
-#line 341 "../../src/configparser.y"
+#line 341 "./configparser.y"
 {
   data_config *cur;
 
@@ -1119,7 +1119,7 @@ static void yy_reduce(
   yy_destructor(14,&yymsp[0].minor);
         break;
       case 29:
-#line 352 "../../src/configparser.y"
+#line 352 "./configparser.y"
 {
   if (yymsp[-3].minor.yy78->context_ndx >= yymsp[0].minor.yy78->context_ndx) {
     fprintf(stderr, "unreachable else condition\n");
@@ -1136,7 +1136,7 @@ static void yy_reduce(
   yy_destructor(15,&yymsp[-1].minor);
         break;
       case 30:
-#line 364 "../../src/configparser.y"
+#line 364 "./configparser.y"
 {
   yygotominor.yy78 = yymsp[0].minor.yy78;
   yymsp[0].minor.yy78 = NULL;
@@ -1144,7 +1144,7 @@ static void yy_reduce(
 #line 1144 "configparser.c"
         break;
       case 31:
-#line 369 "../../src/configparser.y"
+#line 369 "./configparser.y"
 {
   data_config *cur;
 
@@ -1162,7 +1162,7 @@ static void yy_reduce(
   yy_destructor(14,&yymsp[0].minor);
         break;
       case 32:
-#line 380 "../../src/configparser.y"
+#line 380 "./configparser.y"
 {
   data_config *dc;
   buffer *b, *rvalue, *op;
@@ -1318,7 +1318,7 @@ static void yy_reduce(
   yy_destructor(19,&yymsp[-2].minor);
         break;
       case 33:
-#line 529 "../../src/configparser.y"
+#line 529 "./configparser.y"
 {
   yygotominor.yy27 = CONFIG_COND_EQ;
 }
@@ -1326,7 +1326,7 @@ static void yy_reduce(
   yy_destructor(20,&yymsp[0].minor);
         break;
       case 34:
-#line 532 "../../src/configparser.y"
+#line 532 "./configparser.y"
 {
   yygotominor.yy27 = CONFIG_COND_MATCH;
 }
@@ -1334,7 +1334,7 @@ static void yy_reduce(
   yy_destructor(21,&yymsp[0].minor);
         break;
       case 35:
-#line 535 "../../src/configparser.y"
+#line 535 "./configparser.y"
 {
   yygotominor.yy27 = CONFIG_COND_NE;
 }
@@ -1342,7 +1342,7 @@ static void yy_reduce(
   yy_destructor(22,&yymsp[0].minor);
         break;
       case 36:
-#line 538 "../../src/configparser.y"
+#line 538 "./configparser.y"
 {
   yygotominor.yy27 = CONFIG_COND_NOMATCH;
 }
@@ -1350,7 +1350,7 @@ static void yy_reduce(
   yy_destructor(23,&yymsp[0].minor);
         break;
       case 37:
-#line 542 "../../src/configparser.y"
+#line 542 "./configparser.y"
 {
   yygotominor.yy43 = NULL;
   if (ctx->ok) {
@@ -1370,7 +1370,7 @@ static void yy_reduce(
 #line 1370 "configparser.c"
         break;
       case 38:
-#line 559 "../../src/configparser.y"
+#line 559 "./configparser.y"
 {
   if (ctx->ok) {
     if (0 != config_parse_file(ctx->srv, ctx, yymsp[0].minor.yy43->ptr)) {
@@ -1384,7 +1384,7 @@ static void yy_reduce(
   yy_destructor(24,&yymsp[-1].minor);
         break;
       case 39:
-#line 569 "../../src/configparser.y"
+#line 569 "./configparser.y"
 {
   if (ctx->ok) {
     if (0 != config_parse_cmd(ctx->srv, ctx, yymsp[0].minor.yy43->ptr)) {
@@ -1424,7 +1424,7 @@ static void yy_parse_failed(
   while( yypParser->yyidx>=0 ) yy_pop_parser_stack(yypParser);
   /* Here code is inserted which will be executed whenever the
   ** parser fails */
-#line 108 "../../src/configparser.y"
+#line 108 "./configparser.y"
 
   ctx->ok = 0;
 

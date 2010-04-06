@@ -1,0 +1,9 @@
+#!/bin/sh -e
+
+if test "$1" != "upgrade"; then
+    update-alternatives --remove spawn-fcgi /usr/bin/spawn-fcgi.lighttpd
+fi
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,7 @@
+urgent:
+* better package descriptions
+* tweak Recommends: and Suggests:
+
+not-so-urgent:
+* create a dirlisting template that slightly advertises Debian
+

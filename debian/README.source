@@ -1,0 +1,3 @@
+lighttpd uses the quilt patch system, for more info please read the quilt docs:
+
+/usr/share/doc/quilt/README.source

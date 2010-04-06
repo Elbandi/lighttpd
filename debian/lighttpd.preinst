@@ -1,0 +1,35 @@
+#! /bin/sh -e
+# preinst script for lighttpd
+
+CA=/etc/lighttpd/conf-available
+CE=/etc/lighttpd/conf-enabled
+
+if test -f "$CA/10-auth.conf"; then
+    if test -f "$CA/05-auth.conf"; then
+        echo 1>&2 "Not touching conf-available/10-auth.conf because conf-available/05-auth.conf exists !!!"
+        echo 1>&2 "Please read /usr/share/doc/lighttpd/NEWS.Debian"
+    else
+        echo "Renaming conf-available/10-auth.conf into conf-available/05-auth.conf"
+        mv "$CA/10-auth.conf" "$CA/05-auth.conf"
+    fi
+fi
+
+if test -f "$CE/10-auth.conf"; then
+    if test -f "$CE/05-auth.conf"; then
+        echo 1>&2 "Not touching conf-enabled/10-auth.conf because conf-enabled/05-auth.conf exists !!!"
+        echo 1>&2 "Please read /usr/share/doc/lighttpd/NEWS.Debian"
+    else
+        if test -h "$CE/10-auth.conf" && test "$(readlink -m "$CE/10-auth.conf")" = "$CA/10-auth.conf"; then
+            echo "Updating conf-enabled symlink to 05-auth.conf accordingly"
+            ln -s -f "../conf-available/05-auth.conf" "$CE/05-auth.conf"
+        fi
+        if test -f "$CE/10-auth.conf"; then
+            echo "Renaming conf-enabled/10-auth.conf into conf-enabled/05-auth.conf"
+            mv "$CE/10-auth.conf" "$CE/05-auth.conf"
+        fi
+    fi
+fi
+
+#DEBHELPER#
+
+exit 0

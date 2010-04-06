@@ -1,0 +1,18 @@
+#! /bin/sh -e
+# postinst script for lighttpd
+
+if [ "$1" = "configure" ]; then
+   	if [ ! -r /var/www/index.lighttpd.html ];
+   	then
+   		cp /usr/share/lighttpd/index.html /var/www/index.lighttpd.html
+	fi
+        mkdir -p /var/run/lighttpd > /dev/null 2> /dev/null
+	chown www-data:www-data /var/log/lighttpd /var/run/lighttpd
+        chown www-data:www-data /var/cache/lighttpd /var/cache/lighttpd/compress /var/cache/lighttpd/uploads
+	chmod 0750 /var/log/lighttpd /var/run/lighttpd
+
+fi
+
+#DEBHELPER#
+
+exit 0

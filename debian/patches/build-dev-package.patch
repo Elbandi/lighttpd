@@ -1,0 +1,52 @@
+Index: lighttpd-1.4.26-1ubuntu1/Makefile.am
+===================================================================
+--- lighttpd-1.4.26-1ubuntu1.orig/Makefile.am	2010-03-07 20:15:37.946313405 -0500
++++ lighttpd-1.4.26-1ubuntu1/Makefile.am	2010-03-07 20:41:21.446325209 -0500
+@@ -5,3 +5,6 @@
+ ACLOCAL_AMFLAGS = -I m4
+ 
+ distcleancheck_listfiles = find -type f -exec sh -c 'test -f $(srcdir)/{} || echo {}' ';'
++
++pkgconfigdir = $(libdir)/pkgconfig
++pkgconfig_DATA = lighttpd.pc
+Index: lighttpd-1.4.26-1ubuntu1/configure
+===================================================================
+--- lighttpd-1.4.26-1ubuntu1.orig/configure	2010-03-07 20:15:37.926314075 -0500
++++ lighttpd-1.4.26-1ubuntu1/configure	2010-03-07 20:41:04.717567219 -0500
+@@ -15045,7 +15045,7 @@
+ _ACEOF
+ 
+ 
+-ac_config_files="$ac_config_files Makefile src/Makefile doc/Makefile tests/Makefile tests/docroot/Makefile tests/docroot/123/Makefile tests/docroot/www/Makefile tests/docroot/www/go/Makefile tests/docroot/www/indexfile/Makefile tests/docroot/www/expire/Makefile distribute.sh"
++ac_config_files="$ac_config_files Makefile src/Makefile doc/Makefile tests/Makefile tests/docroot/Makefile tests/docroot/123/Makefile tests/docroot/www/Makefile tests/docroot/www/go/Makefile tests/docroot/www/indexfile/Makefile tests/docroot/www/expire/Makefile lighttpd.pc distribute.sh"
+ 
+ cat >confcache <<\_ACEOF
+ # This file is a shell script that caches the results of configure
+@@ -16037,6 +16037,7 @@
+     "tests/docroot/www/go/Makefile") CONFIG_FILES="$CONFIG_FILES tests/docroot/www/go/Makefile" ;;
+     "tests/docroot/www/indexfile/Makefile") CONFIG_FILES="$CONFIG_FILES tests/docroot/www/indexfile/Makefile" ;;
+     "tests/docroot/www/expire/Makefile") CONFIG_FILES="$CONFIG_FILES tests/docroot/www/expire/Makefile" ;;
++    "lighttpd.pc") CONFIG_FILES="$CONFIG_FILES lighttpd.pc" ;;
+     "distribute.sh") CONFIG_FILES="$CONFIG_FILES distribute.sh" ;;
+ 
+   *) as_fn_error "invalid argument: \`$ac_config_target'" "$LINENO" 5;;
+Index: lighttpd-1.4.26-1ubuntu1/lighttpd.pc.in
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ lighttpd-1.4.26-1ubuntu1/lighttpd.pc.in	2010-03-07 20:41:04.717567219 -0500
+@@ -0,0 +1,15 @@
++# lighttpd pkg-config file
++
++prefix=@prefix@
++exec_prefix=@exec_prefix@
++libdir=@libdir@
++includedir=@includedir@
++
++Name: lighttpd
++Description: lighttpd
++Version: @VERSION@
++Requires:
++Conflicts:
++Libs:
++Cflags: -I${includedir} -DHAVE_CONFIG_H @CPPFLAGS@
++

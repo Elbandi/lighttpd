@@ -1,0 +1,27 @@
+lighttpd (1.4.23-1) unstable; urgency=low
+
+  spawn-fcgi is now separate package. Please install "spawn-fcgi" package if 
+  you need it.
+
+ -- Krzysztof Krzyżaniak (eloy) <eloy@debian.org>  Thu, 09 Jul 2009 15:53:14 +0200
+
+lighttpd (1.4.19-1) unstable; urgency=low
+
+  Lighttpd must load mod_auth first, else some other modules may not work
+  properly (See #419176). For this reason, mod_status configuration has been
+  moved out from lighttpd.conf and put in conf-available/10-status.conf.
+
+  Also the files 10-auth.conf are automatically renamed by the lighttpd
+  package (provided that a sane environment is met) into 05-auth.conf, and
+  symlinks (if they exists) are also updated properly.
+
+  This is done to ensure that auth.conf is loaded first. If during your
+  lighttpd upgrade you read:
+
+    Not touching .../10-auth.conf because .../05-auth.conf exists !!!
+    Please read /usr/share/doc/lighttpd/NEWS.Debian
+
+  then you probably have both 10-auth.conf and 05-auth.conf, which is a bad
+  situation that you should fix.
+
+ -- Pierre Habouzit <madcoder@debian.org>  Sun, 16 Mar 2008 10:56:22 +0100

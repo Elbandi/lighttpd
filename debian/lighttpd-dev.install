@@ -1,0 +1,3 @@
+config.h /usr/include/lighttpd
+src/*.h /usr/include/lighttpd
+lighttpd.pc /usr/lib/pkgconfig

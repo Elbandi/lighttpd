@@ -4,7 +4,7 @@
 /* First off, code is include which follows the "include" declaration
 ** in the input file. */
 #include <stdio.h>
-#line 6 "../../src/mod_ssi_exprparser.y"
+#line 6 "./mod_ssi_exprparser.y"
 
 #include "mod_ssi_expr.h"
 #include "buffer.h"
@@ -347,7 +347,7 @@ static void yy_destructor(YYCODETYPE yymajor, YYMINORTYPE *yypminor){
     case 10:
     case 11:
     case 12:
-#line 22 "../../src/mod_ssi_exprparser.y"
+#line 22 "./mod_ssi_exprparser.y"
 { buffer_free((yypminor->yy0)); }
 #line 352 "mod_ssi_exprparser.c"
       break;
@@ -578,7 +578,7 @@ static void yy_reduce(
   **     break;
   */
       case 0:
-#line 29 "../../src/mod_ssi_exprparser.y"
+#line 29 "./mod_ssi_exprparser.y"
 {
   ctx->val.bo = ssi_val_tobool(yymsp[0].minor.yy29);
   ctx->val.type = SSI_TYPE_BOOL;
@@ -588,7 +588,7 @@ static void yy_reduce(
 #line 588 "mod_ssi_exprparser.c"
         break;
       case 1:
-#line 36 "../../src/mod_ssi_exprparser.y"
+#line 36 "./mod_ssi_exprparser.y"
 {
   int cmp;
 
@@ -617,14 +617,14 @@ static void yy_reduce(
 #line 617 "mod_ssi_exprparser.c"
         break;
       case 2:
-#line 61 "../../src/mod_ssi_exprparser.y"
+#line 61 "./mod_ssi_exprparser.y"
 {
   yygotominor.yy29 = yymsp[0].minor.yy29;
 }
 #line 624 "mod_ssi_exprparser.c"
         break;
       case 3:
-#line 64 "../../src/mod_ssi_exprparser.y"
+#line 64 "./mod_ssi_exprparser.y"
 {
   int e;
 
@@ -639,7 +639,7 @@ static void yy_reduce(
   yy_destructor(1,&yymsp[-1].minor);
         break;
       case 4:
-#line 75 "../../src/mod_ssi_exprparser.y"
+#line 75 "./mod_ssi_exprparser.y"
 {
   int e;
 
@@ -654,7 +654,7 @@ static void yy_reduce(
   yy_destructor(2,&yymsp[-1].minor);
         break;
       case 5:
-#line 86 "../../src/mod_ssi_exprparser.y"
+#line 86 "./mod_ssi_exprparser.y"
 {
   int e;
 
@@ -668,7 +668,7 @@ static void yy_reduce(
   yy_destructor(9,&yymsp[-1].minor);
         break;
       case 6:
-#line 95 "../../src/mod_ssi_exprparser.y"
+#line 95 "./mod_ssi_exprparser.y"
 {
   yygotominor.yy29 = yymsp[-1].minor.yy29;
 }
@@ -677,7 +677,7 @@ static void yy_reduce(
   yy_destructor(11,&yymsp[0].minor);
         break;
       case 7:
-#line 99 "../../src/mod_ssi_exprparser.y"
+#line 99 "./mod_ssi_exprparser.y"
 {
   yygotominor.yy29 = ssi_val_init();
   yygotominor.yy29->str = yymsp[0].minor.yy19;
@@ -686,14 +686,14 @@ static void yy_reduce(
 #line 686 "mod_ssi_exprparser.c"
         break;
       case 8:
-#line 105 "../../src/mod_ssi_exprparser.y"
+#line 105 "./mod_ssi_exprparser.y"
 {
   yygotominor.yy19 = yymsp[0].minor.yy0;
 }
 #line 693 "mod_ssi_exprparser.c"
         break;
       case 9:
-#line 109 "../../src/mod_ssi_exprparser.y"
+#line 109 "./mod_ssi_exprparser.y"
 {
   yygotominor.yy19 = yymsp[-1].minor.yy19;
   buffer_append_string_buffer(yygotominor.yy19, yymsp[0].minor.yy0);
@@ -702,37 +702,37 @@ static void yy_reduce(
 #line 702 "mod_ssi_exprparser.c"
         break;
       case 10:
-#line 115 "../../src/mod_ssi_exprparser.y"
+#line 115 "./mod_ssi_exprparser.y"
 { yygotominor.yy8 = SSI_COND_EQ; }
 #line 707 "mod_ssi_exprparser.c"
   yy_destructor(3,&yymsp[0].minor);
         break;
       case 11:
-#line 116 "../../src/mod_ssi_exprparser.y"
+#line 116 "./mod_ssi_exprparser.y"
 { yygotominor.yy8 = SSI_COND_NE; }
 #line 713 "mod_ssi_exprparser.c"
   yy_destructor(4,&yymsp[0].minor);
         break;
       case 12:
-#line 117 "../../src/mod_ssi_exprparser.y"
+#line 117 "./mod_ssi_exprparser.y"
 { yygotominor.yy8 = SSI_COND_LE; }
 #line 719 "mod_ssi_exprparser.c"
   yy_destructor(8,&yymsp[0].minor);
         break;
       case 13:
-#line 118 "../../src/mod_ssi_exprparser.y"
+#line 118 "./mod_ssi_exprparser.y"
 { yygotominor.yy8 = SSI_COND_GE; }
 #line 725 "mod_ssi_exprparser.c"
   yy_destructor(6,&yymsp[0].minor);
         break;
       case 14:
-#line 119 "../../src/mod_ssi_exprparser.y"
+#line 119 "./mod_ssi_exprparser.y"
 { yygotominor.yy8 = SSI_COND_LT; }
 #line 731 "mod_ssi_exprparser.c"
   yy_destructor(7,&yymsp[0].minor);
         break;
       case 15:
-#line 120 "../../src/mod_ssi_exprparser.y"
+#line 120 "./mod_ssi_exprparser.y"
 { yygotominor.yy8 = SSI_COND_GT; }
 #line 737 "mod_ssi_exprparser.c"
   yy_destructor(5,&yymsp[0].minor);
@@ -764,7 +764,7 @@ static void yy_parse_failed(
   while( yypParser->yyidx>=0 ) yy_pop_parser_stack(yypParser);
   /* Here code is inserted which will be executed whenever the
   ** parser fails */
-#line 14 "../../src/mod_ssi_exprparser.y"
+#line 14 "./mod_ssi_exprparser.y"
 
   ctx->ok = 0;
 

@@ -1,0 +1,43 @@
+#!/usr/bin/make -f
+
+DH_VERBOSE=1
+
+build: build-stamp
+build-stamp:
+	dh build --before auto_configure
+	dh_quilt_patch
+	./configure --build=i486-linux-gnu --prefix=/usr \
+		--includedir="/usr/include" \
+		--mandir="/usr/share/man" \
+		--infodir="/usr/share/info" --sysconfdir=/etc \
+		--localstatedir=/var --libexecdir="/usr/lib/lighttpd" \
+		--disable-maintainer-mode --disable-dependency-tracking \
+		--srcdir=.   --libdir=/usr/lib/lighttpd --with-openssl \
+		--with-kerberos5 --with-pcre --with-fam --with-ldap \
+		--with-mysql --with-memcache --with-lua=lua5.1 --with-gdbm \
+		--with-attr --with-webdav-locks --with-webdav-props
+	dh build --after auto_configure
+	touch $@
+
+install: install-stamp
+install-stamp: build-stamp
+	dh --before dh_auto_install install
+	dh_auto_install
+	chmod a+x debian/create-mime.assign.pl
+	chmod a+x debian/include-conf-enabled.pl
+	chmod a+x debian/lighty-enable-mod
+	chmod a+x debian/use-ipv6.pl
+	dh --after dh_auto_install install
+	touch $@
+	install -m644 debian/lighttpd.ufw.profile debian/lighttpd/etc/ufw/applications.d/lighttpd
+
+binary-arch: install
+	dh $@
+
+binary: binary-arch binary-indep
+
+override_dh_installinit:
+	dh_installinit --error-handler=true -- defaults 91 09
+
+%:
+	dh --with quilt $@

@@ -1,0 +1,9 @@
+var/www
+var/log/lighttpd
+var/cache/lighttpd/compress
+var/cache/lighttpd/uploads
+etc/lighttpd/conf-available
+etc/lighttpd/conf-enabled
+etc/ufw/applications.d
+usr/sbin
+usr/lib/cgi-bin

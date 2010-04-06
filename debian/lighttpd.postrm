@@ -1,0 +1,10 @@
+#!/bin/sh -e
+# postrm script for lighttpd
+
+if [ "$1" = "purge" ]; then
+    rm -rf /var/log/lighttpd /var/run/lighttpd /var/cache/lighttpd
+fi
+
+#DEBHELPER#
+
+exit 0
