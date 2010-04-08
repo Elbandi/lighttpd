@@ -33,7 +33,7 @@ int http_response_write_header(server *srv, connection *con) {
 	int have_date = 0;
 	int have_server = 0;
 
-	b = chunkqueue_get_prepend_buffer(con->write_queue);
+	b = chunkqueue_get_prepend_buffer(con->output_queue);
 
 	if (con->request.http_version == HTTP_VERSION_1_1) {
 		buffer_copy_string_len(b, CONST_STR_LEN("HTTP/1.1 "));
@@ -76,6 +76,16 @@ int http_response_write_header(server *srv, connection *con) {
 			if (0 == strcasecmp(ds->key->ptr, "Date")) have_date = 1;
 			if (0 == strcasecmp(ds->key->ptr, "Server")) have_server = 1;
 			if (0 == strcasecmp(ds->key->ptr, "Content-Encoding") && 304 == con->http_status) continue;
+
+			/* remove Transfer-Encoding: chunked header when HTTP 1.0
+			 * or transfer_encoding & HTTP_TRANSFER_ENCODING_CHUNKED == 0
+			 */
+			if ( (con->request.http_version == HTTP_VERSION_1_0 ||
+					!(con->response.transfer_encoding & HTTP_TRANSFER_ENCODING_CHUNKED)) &&
+					0 == strncasecmp(ds->value->ptr, "chunked", sizeof("chunked")-1) &&
+					0 == strncasecmp(ds->key->ptr, "Transfer-Encoding", sizeof("Transfer-Encoding") - 1)) {
+				continue ;
+			}
 
 			buffer_append_string_len(b, CONST_STR_LEN("\r\n"));
 			buffer_append_string_buffer(b, ds->key);
@@ -662,7 +672,7 @@ handler_t http_response_prepare(server *srv, connection *con) {
 				}
 
 				if (slash) pathinfo = slash;
-			} while ((found == 0) && (slash != NULL) && ((size_t)(slash - srv->tmp_buf->ptr) > (con->physical.basedir->used - 2)));
+			} while ((found == 0) && (slash != NULL) && (abs(slash - srv->tmp_buf->ptr) > con->physical.basedir->used - 2));
 
 			if (found == 0) {
 				/* no it really doesn't exists */

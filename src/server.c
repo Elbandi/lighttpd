@@ -233,6 +233,9 @@ static server *server_init(void) {
 	srv->joblist = calloc(1, sizeof(*srv->joblist));
 	assert(srv->joblist);
 
+	srv->joblist_prev = calloc(1, sizeof(*srv->joblist));
+	assert(srv->joblist_prev);
+
 	srv->fdwaitqueue = calloc(1, sizeof(*srv->fdwaitqueue));
 	assert(srv->fdwaitqueue);
 
@@ -327,6 +330,7 @@ static void server_free(server *srv) {
 #undef CLEAN
 
 	joblist_free(srv, srv->joblist);
+	joblist_free(srv, srv->joblist_prev);
 	fdwaitqueue_free(srv, srv->fdwaitqueue);
 
 	if (srv->stat_cache) {
@@ -1160,6 +1164,7 @@ int main (int argc, char **argv) {
 	/* main-loop */
 	while (!srv_shutdown) {
 		int n;
+		int timeout;
 		size_t ndx;
 		time_t min_ts;
 
@@ -1416,7 +1421,12 @@ int main (int argc, char **argv) {
 			}
 		}
 
-		if ((n = fdevent_poll(srv->ev, 1000)) > 0) {
+		if(srv->joblist->used > 0) {
+			timeout = 500;
+		} else {
+			timeout = 1000;
+		}
+		if ((n = fdevent_poll(srv->ev, timeout)) > 0) {
 			/* n is the number of events */
 			int revents;
 			int fd_ndx;
@@ -1464,10 +1474,16 @@ int main (int argc, char **argv) {
 					strerror(errno));
 		}
 
-		for (ndx = 0; ndx < srv->joblist->used; ndx++) {
-			connection *con = srv->joblist->ptr[ndx];
+		if(srv->joblist->used > 0) {
+			connections *joblist = srv->joblist;
+			/* switch joblist queues. */
+			srv->joblist = srv->joblist_prev;
+			srv->joblist_prev = joblist;
+			for (ndx = 0; ndx < joblist->used; ndx++) {
+				connection *con = joblist->ptr[ndx];
 			handler_t r;
 
+				con->in_joblist = 0;
 			connection_state_machine(srv, con);
 
 			switch(r = plugins_call_handle_joblist(srv, con)) {
@@ -1478,11 +1494,9 @@ int main (int argc, char **argv) {
 				log_error_write(srv, __FILE__, __LINE__, "d", r);
 				break;
 			}
-
-			con->in_joblist = 0;
 		}
-
-		srv->joblist->used = 0;
+			joblist->used = 0;
+		}
 	}
 
 	if (srv->srvconf.pid_file->used &&

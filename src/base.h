@@ -377,8 +377,10 @@ typedef struct {
 
 	int file_started;
 	int file_finished;
+	int end_chunk; /* used for chunked transfer encoding. */
 
-	chunkqueue *write_queue;      /* a large queue for low-level write ( HTTP response ) [ file, mem ] */
+	chunkqueue *write_queue;  /* a large queue for HTTP response content [ file, mem ] */
+	chunkqueue *output_queue; /* a large queue for low-level write ( HTTP response ) [ file, mem ] */
 	chunkqueue *read_queue;       /* a small queue for low-level read ( HTTP request ) [ mem ] */
 	chunkqueue *request_content_queue; /* takes request-content into tempfile if necessary [ tempfile, mem ]*/
 
@@ -439,6 +441,18 @@ typedef struct {
 	etag_flags_t etag_flags;
 
 	int conditional_is_valid[COMP_LAST_ELEMENT]; 
+	
+	/* two control flag for mod_cache. */
+	/* flag to use cache file, set in mod_cache, used by other modules*/
+	
+	int use_cache_file; 
+	/* flag to write cache file, set in mod_proxy or mod_fastcgi,
+	 * if it set to 1, mod_cache will try to save response to cache file
+	 */
+	int write_cache_file;
+
+	/* flag for mod_proxy to remove Range: bytes=xxx header or not */
+	int remove_range_request_header;
 } connection;
 
 typedef struct {
@@ -620,6 +634,7 @@ typedef struct server {
 
 	connections *conns;
 	connections *joblist;
+	connections *joblist_prev;
 	connections *fdwaitqueue;
 
 	stat_cache  *stat_cache;
