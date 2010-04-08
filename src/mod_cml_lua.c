@@ -426,7 +426,7 @@ int cache_parse_lua(server *srv, connection *con, plugin_data *p, buffer *fn) {
 				tbuf.ptr = NULL;
 			}
 
-			if (HANDLER_FINISHED == http_response_handle_cachable(srv, con, &tbuf)) {
+			if (HANDLER_FINISHED == http_response_handle_cachable(srv, con, &tbuf, con->physical.etag)) {
 				/* ok, the client already has our content,
 				 * no need to send it again */
 
