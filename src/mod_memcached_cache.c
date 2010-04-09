@@ -30,8 +30,8 @@ SUCH DAMAGE.
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <assert.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include "base.h"
 #include "log.h"
@@ -62,13 +62,21 @@ SUCH DAMAGE.
 #define CONFIG_MEMCACHED_CACHE_HOSTS "memcached-cache.memcache-hosts"
 #define CONFIG_MEMCACHED_CACHE_NAMESPACE "memcached-cache.memcache-namespace"
 
+#define MEMCACHED_CACHE_USED_MB "memcached-cache.used-memory(MB)"
+#define MEMCACHED_CACHE_USED "memcached-cache.usedmemory"
+#define MEMCACHED_CACHE_ITEMS "memcached-cache.cached-items"
+#define MEMCACHED_CACHE_NUMBER "memcached-cache.cachenumber"
+#define MEMCACHED_CACHE_HITRATE "memcached-cache.hitrate(%)"
+#define MEMCACHED_CACHE_HITPERCENT "memcached-cache.hitpercent"
+
 typedef struct {
 	/* number of cache items removed by lru when memory is full */
 	unsigned short lru_remove_count;
 	unsigned short enable;
 	short thresold;
-	off_t maxmemory; /* maxium total used memory in MB */
-	off_t maxfilesize; /* maxium file size will put into memory */
+	uint64_t maxmemory; /* maxium total used memory in MB */
+	int32_t maxmemory_2;
+	uint32_t maxfilesize; /* maxium file size will put into memory */
 	unsigned int expires;
 	array  *filetypes;
 
@@ -77,11 +85,13 @@ typedef struct {
 	buffer *mc_namespace;
 } plugin_config;
 
-#define MEMCACHED_NUM 65536 /* 2^16 */
+#define MEMCACHED_SIZE 65536 /* 2^16 */
+#define MEMCACHE_MASK (MEMCACHED_SIZE-1)
 #define LRUDEBUG 0
 
 static int lruheader, lruend;
-static unsigned long reqcount, reqhit, cachenumber;
+static uint64_t reqcount, reqhit;
+static uint32_t cachenumber;
 static unsigned int cachefile = 0;
 
 #ifdef LIGHTTPD_V15
@@ -125,11 +135,13 @@ struct cache_entry{
 	buffer *content_type;
 	/* etag */
 	buffer *etag;
+
+	unsigned int hash;
 }; 
 
 static struct cache_entry *memcache;
 
-static float usedmemory = 0;
+static uint64_t usedmemory = 0; /* to support > 4G memory */
 
 /* probation lru splaytree */
 splay_tree *plru;
@@ -148,19 +160,20 @@ typedef struct {
 } plugin_data;
 
 /* init cache_entry table */
-static struct cache_entry *cache_entry_init(void) {
+static struct cache_entry *global_cache_entry_init(void) {
 	struct cache_entry *c;
-	c = (struct cache_entry *) malloc(sizeof(struct cache_entry)*(MEMCACHED_NUM+1));
-	assert(c);
-	memset(c, 0, sizeof(struct cache_entry)*(MEMCACHED_NUM+1));
+	c = (struct cache_entry *) calloc(MEMCACHED_SIZE+1, sizeof(struct cache_entry));
 	return c;
 }
 
 /* free cache_entry */
-static void cache_entry_free(struct cache_entry *cache) {
+static void free_cache_entry(struct cache_entry *cache) {
 	if (cache == NULL) return;
 	cachenumber --;
-	usedmemory -= cache->size;
+	if (usedmemory >= cache->size)
+		usedmemory -= cache->size;
+	else
+		usedmemory = 0;
 	if (!buffer_is_empty(cache->content_name))
 		mc_delete(cache->mc, cache->content_name->ptr, cache->content_name->used, 0);
 	buffer_free(cache->content_name);
@@ -168,11 +181,11 @@ static void cache_entry_free(struct cache_entry *cache) {
 	buffer_free(cache->etag);
 	buffer_free(cache->path);
 	buffer_free(cache->mtime);
-	memset(cache, 0, sizeof(struct cache_entry));
+	cache->mtime = cache->etag = cache->path = cache->content_type = cache->content_name = NULL;
 }
 
 /* reset cache_entry to initial state */
-static void cache_entry_reset(struct cache_entry *cache, struct memcache *mc, buffer *namespace) {
+static void init_cache_entry(struct cache_entry *cache, struct memcache *mc, buffer *namespace) {
 	if (cache == NULL) return;
 	if (cache->content_name == NULL) {
 		char tmp[10];
@@ -202,9 +215,9 @@ INIT_FUNC(mod_memcached_cache_init) {
 	UNUSED(srv);
 #endif
 	p = calloc(1, sizeof(*p));
-	memcache = cache_entry_init();
+	memcache = global_cache_entry_init();
 	lruheader = lruend = cachenumber = 0;
-	reqcount = reqhit = 1;
+	reqcount = reqhit = 0;
 	usedmemory = 0;
 	plru = NULL;
 	
@@ -217,7 +230,7 @@ void free_cache_entry_chain(struct cache_entry *p) {
 	c1 = p;
 	while(c1) {
 		c2 = c1->scnext;
-		cache_entry_free(c1);
+		free_cache_entry(c1);
 		if (c1 != p) free(c1);
 		c1 = c2;
 	}
@@ -233,7 +246,7 @@ FREE_FUNC(mod_memcached_cache_free) {
 
 	if (!p) return HANDLER_GO_ON;
 	
-	for (i = 0; i<= MEMCACHED_NUM; i++) {
+	for (i = 0; i<= MEMCACHED_SIZE; i++) {
 		free_cache_entry_chain(memcache+i);
 	}
 
@@ -253,6 +266,11 @@ FREE_FUNC(mod_memcached_cache_free) {
 	
 	free(p);
 	free(memcache);
+
+	while(plru) {
+		free(plru->data);
+		plru = splaytree_delete(plru, plru->key);
+	}
 
 	return HANDLER_GO_ON;
 }
@@ -284,7 +302,7 @@ SETDEFAULTS_FUNC(mod_memcached_cache_set_defaults) {
 		plugin_config *s;
 		
 		s = calloc(1, sizeof(plugin_config));
-		s->maxmemory = 256; /* 256M default */
+		s->maxmemory_2 = 256; /* 256M default */
 		s->maxfilesize = 512; /* maxium 512k */
 		s->lru_remove_count = 10; /* default 10 */
 		s->enable = 1; /* default to cache content into memory */
@@ -295,7 +313,7 @@ SETDEFAULTS_FUNC(mod_memcached_cache_set_defaults) {
 		s->mc_namespace = buffer_init();
 
 		
-		cv[0].destination = &(s->maxmemory);
+		cv[0].destination = &(s->maxmemory_2);
 		cv[1].destination = &(s->maxfilesize);
 		cv[2].destination = &(s->lru_remove_count);
 		cv[3].destination = &(s->enable);
@@ -311,6 +329,16 @@ SETDEFAULTS_FUNC(mod_memcached_cache_set_defaults) {
 			return HANDLER_ERROR;
 		}
 		s->expires *= 60;
+
+		if (s->maxfilesize <= 0) s->maxfilesize = 512; /* 512K */
+		s->maxfilesize *= 1024; /* KBytes */
+
+		if (s->maxmemory_2 <= 0) s->maxmemory_2 = 256; /* 256M */
+		s->maxmemory = s->maxmemory_2;
+		s->maxmemory *= 1024*1024; /* MBytes */
+
+		if (srv->srvconf.max_worker > 0)
+			s->maxmemory /= srv->srvconf.max_worker;
 
 		if (s->mc_hosts->used) {
 			size_t k;
@@ -340,21 +368,10 @@ SETDEFAULTS_FUNC(mod_memcached_cache_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-/* the famous DJB hash function for strings from stat_cache.c*/
-static uint32_t hashme(buffer *str) {
-	uint32_t hash = 5381;
-	const char *s;
-	for (s = str->ptr; *s; s++) {
-		hash = ((hash << 5) + hash) + *s;
-	}
-
-	hash &= ~(1 << 31); /* strip the highest bit */
-
-	return hash;
-}
-
+#ifndef PATCH_OPTION
 #define PATCH_OPTION(x) \
 	p->conf.x = s->x
+#endif
 
 static int mod_memcached_cache_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
@@ -435,26 +452,26 @@ static void print_static_lru(server *srv) {
 }
 #endif
 
+#undef PATCH_OPTION
+
 /* free all cache-entry and init cache_entry */
 static void free_all_cache_entry(server *srv) {
 	int j;
 
 	UNUSED(srv);
-	for (j = 0; j <= MEMCACHED_NUM; j++) {
+	for (j = 0; j <= MEMCACHED_SIZE; j++) {
 		free_cache_entry_chain(memcache+j);
 	}
 
-	memset(memcache, 0, sizeof(struct cache_entry)*(MEMCACHED_NUM+1));
-	lruheader = lruend = cachenumber = 0;
-	usedmemory = 0;
-#ifdef LIGHTTPD_V14
+	memset(memcache, 0, sizeof(struct cache_entry)*(MEMCACHED_SIZE+1));
+	lruheader = lruend = cachenumber = usedmemory = 0;
 	log_error_write(srv, __FILE__, __LINE__, "s", "free all state_cache data due to data inconsistence");
-	status_counter_set(srv, CONST_STR_LEN("memcached-cache.usedmemory"), usedmemory);
-	status_counter_set(srv, CONST_STR_LEN("memcached-cache.cachenumber"), cachenumber);
+#ifdef LIGHTTPD_V14
+	status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_USED), usedmemory);
+	status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_NUMBER), cachenumber);
 #else
-	TRACE("%s", "free all state_cache data due to data inconsistence");
-	status_counter_set(CONST_STR_LEN("memcached-cache.memory-inuse(MB)"), ((long)usedmemory)>>20);
-	status_counter_set(CONST_STR_LEN("memcached-cache.cached-items"), cachenumber);
+	status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_USED_MB), ((long)usedmemory)>>20);
+	status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_ITEMS), cachenumber);
 #endif
 }
 
@@ -482,11 +499,11 @@ static void free_cache_entry_by_lru(server *srv, const int num) {
 		if (lruheader == 0) { lruheader = lruend = cachenumber = usedmemory = 0; break; }
 	}
 #ifdef LIGHTTPD_V14
-	status_counter_set(srv, CONST_STR_LEN("memcached-cache.usedmemory"), usedmemory);
-	status_counter_set(srv, CONST_STR_LEN("memcached-cache.cachenumber"), cachenumber);
+	status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_USED), usedmemory);
+	status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_NUMBER), cachenumber);
 #else
-	status_counter_set(CONST_STR_LEN("memcached-cache.memory-inuse(MB)"), ((long)usedmemory)>>20);
-	status_counter_set(CONST_STR_LEN("memcached-cache.cached-items"), cachenumber);
+	status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_USED_MB), ((long)usedmemory)>>20);
+	status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_ITEMS), cachenumber);
 #endif
 #if LRUDEBUG
 	log_error_write(srv, __FILE__, __LINE__, "sdsdsds",
@@ -544,36 +561,31 @@ static void update_lru(server *srv, int i) {
  */
 static int readfile_into_buffer(server *srv, connection *con, int filesize, buffer *dst) {
 	int ifd;
+	char *files;
 
 	UNUSED(srv);
 
 	if (dst == NULL) return 1;
 	if (dst->size <= (size_t) filesize) return 1;
 	if (-1 == (ifd = open(con->physical.path->ptr, O_RDONLY | O_BINARY))) {
-#ifdef LIGHTTPD_V14
 		log_error_write(srv, __FILE__, __LINE__, "sbss", "opening plain-file", 
 				con->physical.path, "failed", strerror(errno));
-#else
-		TRACE("fail to open %s: %s", con->physical.path->ptr, strerror(errno));
-#endif
 		return 1;
 	}
 
-	if (filesize == read(ifd, dst->ptr, filesize)) { 
-		dst->ptr[filesize] = '\0';
-		dst->used = filesize + 1;
-		close(ifd); 
-		return 0; 
-	} else { 
-#ifdef LIGHTTPD_V14
-		log_error_write(srv, __FILE__, __LINE__, "sds", "fail to read all of ", 
-				filesize, "bytes into memory");
-#else
-		TRACE("fail to read %d bytes of %s into memory", filesize, con->physical.path->ptr);
-#endif
+	files = mmap(NULL, filesize, PROT_READ, MAP_PRIVATE, ifd, 0);
+	if (files == NULL) {
+		log_error_write(srv, __FILE__, __LINE__, "sbs", "mmap", con->physical.path, "failed");
 		close(ifd); 
 		return 1; 
 	}
+
+	memcpy(dst->ptr, files, filesize);
+	dst->ptr[filesize] = '\0';
+	dst->used = filesize + 1;
+	munmap(files, filesize);
+	close(ifd);
+	return 0;
 }
 
 
@@ -581,15 +593,16 @@ static int readfile_into_buffer(server *srv, connection *con, int filesize, buff
  * else if HIT but expired, set status = 0 and return ptr
  * else if not HIT, set status = 0 and return NULL
  */
-static struct cache_entry *check_memcached(server *srv, connection *con, plugin_data *p, int *status, const uint32_t i) {
+static struct cache_entry *check_memcached(server *srv, connection *con, int *status, const unsigned int hash) {
 	struct cache_entry *c;
-	int success = 0;
+	int success = 0, i;
 
+	i = (hash & MEMCACHE_MASK)+1;
 	c = memcache+i;
-	*status = 0;
+	if (status) *status = 0;
 	
 	while (c) {
-		if (c->path && buffer_is_equal(c->path, con->physical.path)) {
+		if (c->path && c->hash == hash && buffer_is_equal(c->path, con->physical.path)) {
 			success = 1;
 			break;
 		}
@@ -597,9 +610,8 @@ static struct cache_entry *check_memcached(server *srv, connection *con, plugin_
 	}
 
 	if (success) {
-		if (c->inuse && p->conf.expires 
-			&& (srv->cur_ts - c->ct)  <= (time_t )p->conf.expires)
-			*status = 1;
+		if (c->inuse && (srv->cur_ts <= c->ct))
+			if (status) *status = 1;
 		return c;
 	}
 
@@ -610,7 +622,7 @@ static struct cache_entry *get_memcached_cache_entry(const uint32_t hash) {
 	uint32_t i;
 	struct cache_entry *c1, *c2;
 
-	i = (hash & (MEMCACHED_NUM-1))+1;
+	i = (hash & (MEMCACHED_SIZE-1))+1;
 	c1 = c2 = memcache+i;
 	
 	/* try to find unused item first */
@@ -620,9 +632,8 @@ static struct cache_entry *get_memcached_cache_entry(const uint32_t hash) {
 	}
 	if (c1) return c1; /* use the first unused item */
 	/* we need allocate new cache_entry */
-	c1 = (struct cache_entry *)malloc(sizeof(struct cache_entry));
+	c1 = (struct cache_entry *)calloc(1, sizeof(struct cache_entry));
 	if (c1 == NULL) return NULL;
-	memset(c1, 0, sizeof(struct cache_entry));
 	/* put new cache_entry into hash table */
 	c2->scnext = c1;
 	return c1;
@@ -638,7 +649,7 @@ static int check_probation_lru(server *srv, plugin_data *p, int hash) {
 	if (p->conf.thresold == 0) return 0;
 	plru = splaytree_splay(plru, hash);
 	if (plru == NULL || plru->key != hash) { /* first splaytree node or new node*/
-		pr = (struct probation *) malloc(sizeof(struct probation));
+		pr = (struct probation *) calloc(1, sizeof(struct probation));
 		if (pr == NULL) { /* out of memory */
 			return 1;
 		}
@@ -664,13 +675,13 @@ static int check_probation_lru(server *srv, plugin_data *p, int hash) {
 
 handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_d) {
 	plugin_data *p = p_d;
-	uint32_t hash;
-	int i = 0, success = 0;
+	unsigned int hash;
+	int success = 0;
 	size_t m;
 	stat_cache_entry *sce = NULL;
 	buffer *mtime;
 	data_string *ds;
-	struct cache_entry *cache;
+	struct cache_entry *cache = NULL;
 	buffer *content;
 	
 	/* someone else has done a decision for us */
@@ -697,19 +708,19 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 	}
 	
 	if (con->conf.range_requests && NULL != array_get_element(con->request.headers, "Range"))
+		/* don't handle Range request */
 		return HANDLER_GO_ON;
 
 	mod_memcached_cache_patch_connection(srv, con, p);
 	
-	if (p->conf.enable == 0|| p->conf.maxfilesize == 0) return HANDLER_GO_ON;
+	if (p->conf.enable == 0 || p->conf.maxfilesize == 0) return HANDLER_GO_ON;
 
 	if (con->conf.log_request_handling) {
 		log_error_write(srv, __FILE__, __LINE__, "s", "-- mod_memcached_cache_uri_handler called");
 	}
 
 	hash = hashme(con->physical.path);
-	i = (hash & (MEMCACHED_NUM-1))+1;
-	cache = check_memcached(srv, con, p, &success, i);
+	cache = check_memcached(srv, con, &success, hash);
 	reqcount ++;
 	content = buffer_init();
 
@@ -717,7 +728,7 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 		void *r;
 		buffer_prepare_copy(content, cache->size);
 		if (NULL == (r = mc_aget(p->conf.mc, CONST_BUF_LEN(cache->content_name)))) {
-			cache_entry_reset(cache, p->conf.mc, p->conf.mc_namespace);
+			init_cache_entry(cache, p->conf.mc, p->conf.mc_namespace);
 			buffer_reset(content);
 		} else {
 			buffer_copy_memory(content, r, cache->size);
@@ -750,9 +761,11 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 			    strncmp(ds->value->ptr, sce->content_type->ptr, ds->value->used-1)==0)
 				break;
 		}
-		if (m && m == p->conf.filetypes->used)
+
+		if (m && m == p->conf.filetypes->used) /* not found */
 			goto handler_go_on;
-		if (sce->st.st_size == 0 || ((sce->st.st_size >> 10) > p->conf.maxfilesize)) {
+
+		if (sce->st.st_size == 0 || (sce->st.st_size > p->conf.maxfilesize)) { /* don't cache big file */
 			goto handler_go_on;
 		}
 
@@ -782,13 +795,13 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 
 		if (buffer_is_empty(content)) {
 
-			while ((((long)usedmemory + sce->st.st_size) >> 20) > p->conf.maxmemory) {
+			while ((usedmemory + sce->st.st_size) > p->conf.maxmemory) {
 				/* free least used items */
 				free_cache_entry_by_lru(srv, p->conf.lru_remove_count); 
 			}
 
 			/* initialze cache's buffer if needed */
-			cache_entry_reset(cache, p->conf.mc, p->conf.mc_namespace);
+			init_cache_entry(cache, p->conf.mc, p->conf.mc_namespace);
 			buffer_prepare_copy(content, sce->st.st_size);
 			if (readfile_into_buffer(srv, con, sce->st.st_size, content)) {
 				goto handler_go_on;
@@ -800,9 +813,12 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 			cache->size = sce->st.st_size;
 			usedmemory += cache->size;
 			/* increase cachenumber if needed */
-			if (cache->inuse == 0) cachenumber ++;
-			cache->inuse = 1;
+			if (cache->inuse == 0) {
+				cachenumber ++;
+				cache->inuse = 1;
+			}
 
+			
 
 			if (sce->content_type->used == 0) {
 				buffer_copy_string_len(cache->content_type, CONST_STR_LEN("application/octet-stream"));
@@ -813,13 +829,15 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 			buffer_copy_string_buffer(cache->path, con->physical.path);
 			mtime = strftime_cache_get(srv, sce->st.st_mtime);
 			buffer_copy_string_buffer(cache->mtime, mtime);
-			cache->ct = srv->cur_ts;
+			cache->ct = srv->cur_ts + p->conf.expires;
+			cache->hash = hash;
+			
 #ifdef LIGHTTPD_V14
-			status_counter_set(srv, CONST_STR_LEN("memcached-cache.usedmemory"), usedmemory);
-			status_counter_set(srv, CONST_STR_LEN("memcached-cache.cachenumber"), cachenumber);
+			status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_USED), usedmemory);
+			status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_NUMBER), cachenumber);
 #else
-			status_counter_set(CONST_STR_LEN("memcached-cache.memory-inuse(MB)"), ((long)usedmemory)>>20);
-			status_counter_set(CONST_STR_LEN("memcached-cache.cached-items"), cachenumber);
+			status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_USED_MB), ((long)usedmemory)>>20);
+			status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_ITEMS), cachenumber);
 #endif
 		} else  {
 			cache->ct = srv->cur_ts;
@@ -846,9 +864,9 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 	} else mtime = ds->value;
 
 #ifdef LIGHTTPD_V14
-	status_counter_set(srv, CONST_STR_LEN("memcached-cache.hitpercent"), reqhit*100/reqcount);
+	status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_HITPERCENT), reqhit*100/reqcount);
 #else
-	status_counter_set(CONST_STR_LEN("memcached-cache.hitrate(%)"), (int) (((float)reqhit/(float)reqcount)*100));
+	status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_HITRATE), (int) (((float)reqhit/(float)reqcount)*100));
 #endif
 	if (HANDLER_FINISHED == http_response_handle_cachable(srv, con, mtime /*, cache->etag */)) {
 		buffer_free(content);
@@ -862,7 +880,7 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 #endif
 	buffer_free(content);
 	buffer_reset(con->physical.path);
-	update_lru(srv, i);
+	update_lru(srv, (hash & MEMCACHE_MASK)+1);
 #ifdef LIGHTTPD_V14
 	con->file_finished = 1;
 #else
