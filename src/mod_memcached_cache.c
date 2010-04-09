@@ -576,16 +576,16 @@ static int readfile_into_buffer(server *srv, connection *con, int filesize, buff
 	files = mmap(NULL, filesize, PROT_READ, MAP_PRIVATE, ifd, 0);
 	if (files == NULL) {
 		log_error_write(srv, __FILE__, __LINE__, "sbs", "mmap", con->physical.path, "failed");
-		close(ifd); 
-		return 1; 
+		close(ifd);
+		return 1;
 	}
 
 	memcpy(dst->ptr, files, filesize);
 	dst->ptr[filesize] = '\0';
 	dst->used = filesize + 1;
 	munmap(files, filesize);
-	close(ifd);
-	return 0;
+	close(ifd); 
+	return 0; 
 }
 
 
@@ -619,7 +619,7 @@ static struct cache_entry *check_memcached(server *srv, connection *con, int *st
 }
 
 static struct cache_entry *get_memcached_cache_entry(const uint32_t hash) {
-	uint32_t i;
+	unsigned int i;
 	struct cache_entry *c1, *c2;
 
 	i = (hash & (MEMCACHED_SIZE-1))+1;
@@ -707,7 +707,7 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 		return HANDLER_GO_ON;
 	}
 	
-	if (con->conf.range_requests && NULL != array_get_element(con->request.headers, "Range"))
+	if (con->conf.range_requests && NULL != array_get_element(con->request.headers, ("Range")))
 		/* don't handle Range request */
 		return HANDLER_GO_ON;
 
@@ -726,12 +726,13 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 
 	if (success != 0 && cache != NULL && p->conf.mc) {
 		void *r;
+		size_t retlen;
 		buffer_prepare_copy(content, cache->size);
-		if (NULL == (r = mc_aget(p->conf.mc, CONST_BUF_LEN(cache->content_name)))) {
+		if (NULL == (r = mc_aget2(p->conf.mc, CONST_BUF_LEN(cache->content_name), &retlen))) {
 			init_cache_entry(cache, p->conf.mc, p->conf.mc_namespace);
 			buffer_reset(content);
 		} else {
-			buffer_copy_memory(content, r, cache->size);
+			buffer_copy_memory(content, r, retlen);
 			free(r);
 		}
 	}
@@ -750,9 +751,9 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 		}
 #endif
 
-		if (!S_ISREG(sce->st.st_mode)) {
+		if (!S_ISREG(sce->st.st_mode))
 			goto handler_go_on;
-		}
+
 		/* check filetypes */
 		for (m = 0; m < p->conf.filetypes->used; m++) {
 			ds = (data_string *)p->conf.filetypes->data[m];
@@ -765,30 +766,36 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 		if (m && m == p->conf.filetypes->used) /* not found */
 			goto handler_go_on;
 
-		if (sce->st.st_size == 0 || (sce->st.st_size > p->conf.maxfilesize)) { /* don't cache big file */
+		if (sce->st.st_size == 0 || (sce->st.st_size > p->conf.maxfilesize))  /* don't cache big file */
 			goto handler_go_on;
-		}
-
 
 		if (cache == NULL) {
 			/* check probation lru now */
 			if (check_probation_lru(srv, p, hash))
 				goto handler_go_on;
+
 			cache = get_memcached_cache_entry(hash);
 			if (cache == NULL) {
 				/* may be out of memory, just return GO_ON */
 				goto handler_go_on;
 			}
 		}
+
+		/* add ETag */
 		etag_mutate(con->physical.etag, sce->etag);
 
+		/* 1) new allocated, cache->inused = 0 
+		 * 2) previous unused, cache->inused = 0 && cache->etag != con->physical.etag
+		 * 3) the items just expired, cache->inused = 0 && cache->etag == con->physical.etag
+		 */
 		if (cache->inuse && buffer_is_equal(con->physical.etag, cache->etag)) {
 			void *r;
+			size_t retlen;
 			buffer_prepare_copy(content, cache->size);
-			if (NULL == (r = mc_aget(p->conf.mc, CONST_BUF_LEN(cache->content_name)))) {
+			if (NULL == (r = mc_aget2(p->conf.mc, CONST_BUF_LEN(cache->content_name), &retlen))) {
 				buffer_reset(content);
 			} else {
-				buffer_copy_memory(content, r, cache->size);
+				buffer_copy_memory(content, r, retlen);
 				free(r);
 			}
 		}
@@ -818,7 +825,6 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 				cache->inuse = 1;
 			}
 
-			
 
 			if (sce->content_type->used == 0) {
 				buffer_copy_string_len(cache->content_type, CONST_STR_LEN("application/octet-stream"));
@@ -827,65 +833,57 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 			}
 			buffer_copy_string_buffer(cache->etag, con->physical.etag);
 			buffer_copy_string_buffer(cache->path, con->physical.path);
-			mtime = strftime_cache_get(srv, sce->st.st_mtime);
-			buffer_copy_string_buffer(cache->mtime, mtime);
+			buffer_copy_string_buffer(cache->mtime, strftime_cache_get(srv, sce->st.st_mtime));
 			cache->ct = srv->cur_ts + p->conf.expires;
 			cache->hash = hash;
-			
-#ifdef LIGHTTPD_V14
-			status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_USED), usedmemory);
-			status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_NUMBER), cachenumber);
-#else
-			status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_USED_MB), ((long)usedmemory)>>20);
-			status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_ITEMS), cachenumber);
-#endif
+//			response_header_overwrite(srv, con, CONST_STR_LEN("X-Cache"), CONST_STR_LEN("to memcache"));
 		} else  {
-			cache->ct = srv->cur_ts;
+			cache->ct = srv->cur_ts + p->conf.expires;
 			reqhit ++;
-//			response_header_overwrite(srv, con, CONST_STR_LEN("X-Mem-Cache"), CONST_STR_LEN("by memcache"));
+//			response_header_overwrite(srv, con, CONST_STR_LEN("X-Cache"), CONST_STR_LEN("by memcache"));
 		}
 	} else {
 		reqhit ++;
-//		response_header_overwrite(srv, con, CONST_STR_LEN("X-Mem-Cache"), CONST_STR_LEN("by memcache"));
+//		response_header_overwrite(srv, con, CONST_STR_LEN("X-Cache"), CONST_STR_LEN("by memcache"));
 	}
 
-	if (NULL == array_get_element(con->response.headers, "Content-Type")) {
+	if (NULL == array_get_element(con->response.headers, ("Content-Type"))) {
 		response_header_overwrite(srv, con, CONST_STR_LEN("Content-Type"), CONST_BUF_LEN(cache->content_type));
 	}
 	
-	if (NULL == array_get_element(con->response.headers, "ETag")) {
+	if (NULL == array_get_element(con->response.headers, ("ETag"))) {
 		response_header_overwrite(srv, con, CONST_STR_LEN("ETag"), CONST_BUF_LEN(cache->etag));
 	}
 
 	/* prepare header */
-	if (NULL == (ds = (data_string *)array_get_element(con->response.headers, "Last-Modified"))) {
+	if (NULL == (ds = (data_string *)array_get_element(con->response.headers, ("Last-Modified")))) {
 		mtime = cache->mtime;
 		response_header_overwrite(srv, con, CONST_STR_LEN("Last-Modified"), CONST_BUF_LEN(mtime));
 	} else mtime = ds->value;
 
-#ifdef LIGHTTPD_V14
-	status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_HITPERCENT), reqhit*100/reqcount);
-#else
-	status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_HITRATE), (int) (((float)reqhit/(float)reqcount)*100));
-#endif
 	if (HANDLER_FINISHED == http_response_handle_cachable(srv, con, mtime /*, cache->etag */)) {
 		buffer_free(content);
 		return HANDLER_FINISHED;
 	}
 
-#ifdef LIGHTTPD_V14
-	chunkqueue_append_buffer(con->write_queue, content);
-#else
-	chunkqueue_append_buffer(con->send, content);
-#endif
-	buffer_free(content);
-	buffer_reset(con->physical.path);
+	/* update LRU here */
 	update_lru(srv, (hash & MEMCACHE_MASK)+1);
+
+	buffer_reset(con->physical.path);
 #ifdef LIGHTTPD_V14
+	status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_HITPERCENT), (int) (((float)reqhit/(float)reqcount)*100));
+	status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_USED), usedmemory);
+	status_counter_set(srv, CONST_STR_LEN(MEMCACHED_CACHE_NUMBER), cachenumber);
+	chunkqueue_append_buffer(con->write_queue, content);
 	con->file_finished = 1;
 #else
+	status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_HITRATE), (int) (((float)reqhit/(float)reqcount)*100));
+	status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_USED_MB), usedmemory >> 20);
+	status_counter_set(CONST_STR_LEN(MEMCACHED_CACHE_ITEMS), cachenumber);
+	chunkqueue_append_buffer(con->send, content);
 	con->send->is_closed = 1;
 #endif
+	buffer_free(content);
 	
 	return HANDLER_FINISHED;
 
@@ -901,8 +899,11 @@ int mod_memcached_cache_plugin_init(plugin *p) {
 	p->name        = buffer_init_string("memcached_cache");
 	
 	p->init        = mod_memcached_cache_init;
-	/*p->handle_physical = mod_memcached_cache_uri_handler; */
+#ifdef LIGHTTPD_V14
 	p->handle_subrequest_start = mod_memcached_cache_uri_handler;
+#else
+	p->handle_response_header = mod_mem_cache_uri_handler;
+#endif
 	p->set_defaults  = mod_memcached_cache_set_defaults;
 	p->cleanup     = mod_memcached_cache_free;
 	
