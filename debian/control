@@ -88,6 +88,14 @@ Description: Control the request handling module for lighttpd
  or at a later stage, when the doc-root is known and the physical-path is 
  already setup
 
+Package: lighttpd-mod-memcached
+Homepage: http://www.lighttpd.net
+Architecture: any
+Depends: lighttpd (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Recommends: memcached
+Description: Cache file module for lighttpd
+ With the cache file.
+
 Package: lighttpd-mod-webdav
 Homepage: http://www.lighttpd.net
 Architecture: any

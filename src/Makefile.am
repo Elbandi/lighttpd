@@ -139,6 +139,11 @@ mod_cgi_la_SOURCES = mod_cgi.c
 mod_cgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_cgi_la_LIBADD = $(common_libadd)
 
+lib_LTLIBRARIES += mod_memcached_cache.la
+mod_memcached_cache_la_SOURCES = mod_memcached_cache.c
+mod_memcached_cache_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_memcached_cache_la_LIBADD = $(MEMCACHE_LIB) $(common_libadd)
+
 lib_LTLIBRARIES += mod_scgi.la
 mod_scgi_la_SOURCES = mod_scgi.c
 mod_scgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
