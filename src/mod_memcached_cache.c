@@ -206,6 +206,51 @@ static void init_cache_entry(struct cache_entry *cache, struct memcache *mc, buf
 	cache->mc = mc;
 }
 
+static int memcache_err_func(MCM_ERR_FUNC_ARGS) {
+
+	const struct memcache_ctxt *ctxt;
+	struct memcache_err_ctxt *ectxt;
+
+	MCM_ERR_INIT_CTXT(ctxt, ectxt);
+
+	if (ectxt->errnum == EAGAIN)
+		errno = ECONNRESET;
+
+	switch (ectxt->severity) {
+		case MCM_ERR_LVL_INFO:
+			break;
+		case MCM_ERR_LVL_NOTICE:
+			break;
+		case MCM_ERR_LVL_WARN:
+			break;
+		case MCM_ERR_LVL_ERR:
+			/* try to continue */
+			ectxt->cont = 'y';
+			break;
+		case MCM_ERR_LVL_FATAL:
+		default:
+			ectxt->cont = 'y';
+			break;
+	}
+
+	/*
+	* ectxt->errmsg - per error message passed along via one of the MCM_*_MSG() macros (optional)
+	* ectxt->errstr - memcache error string (optional, though almost always set)
+	*/
+	if (ectxt->errstr != NULL && ectxt->errmsg != NULL)
+		fprintf(stderr, "memcached: %s():%u: %s: %.*s\n", ectxt->funcname, ectxt->lineno, ectxt->errstr,
+			(int)ectxt->errlen, ectxt->errmsg);
+	else if (ectxt->errstr == NULL && ectxt->errmsg != NULL)
+		fprintf(stderr, "memcached: %s():%u: %.*s\n", ectxt->funcname, ectxt->lineno, (int)ectxt->errlen,
+			ectxt->errmsg);
+	else if (ectxt->errstr != NULL && ectxt->errmsg == NULL)
+		fprintf(stderr, "memcached: %s():%u: %s\n", ectxt->funcname, ectxt->lineno, ectxt->errstr);
+	else
+		fprintf(stderr, "memcached: %s():%u\n", ectxt->funcname, ectxt->lineno);
+
+	return 0;
+}
+
 /* init the plugin data */
 INIT_FUNC(mod_memcached_cache_init) {
 	plugin_data *p;
@@ -220,6 +265,11 @@ INIT_FUNC(mod_memcached_cache_init) {
 	usedmemory = 0;
 	plru = NULL;
 	
+	mcErrSetup(memcache_err_func);
+	/*! delete eventual log filters */
+	mc_err_filter_del(MCM_ERR_LVL_INFO);
+	mc_err_filter_del(MCM_ERR_LVL_NOTICE);
+
 	return p;
 }
 
@@ -717,6 +767,9 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 	if (con->conf.log_request_handling) {
 		log_error_write(srv, __FILE__, __LINE__, "s", "-- mod_memcached_cache_uri_handler called");
 	}
+
+	if (p->conf.mc)
+		mc_server_activate_all(p->conf.mc);
 
 	hash = hashme(con->physical.path);
 	cache = check_memcached(srv, con, &success, hash);
