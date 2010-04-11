@@ -174,7 +174,7 @@ static void free_cache_entry(struct cache_entry *cache) {
 		usedmemory -= cache->size;
 	else
 		usedmemory = 0;
-	if (!buffer_is_empty(cache->content_name))
+	if (!buffer_is_empty(cache->content_name) && cache->mc)
 		mc_delete(cache->mc, cache->content_name->ptr, cache->content_name->used, 0);
 	buffer_free(cache->content_name);
 	buffer_free(cache->content_type);
@@ -192,14 +192,13 @@ static void init_cache_entry(struct cache_entry *cache, struct memcache *mc, buf
 		cache->content_name = buffer_init_buffer(namespace);
 		sprintf(tmp, "_%08X", cachefile++);
 		buffer_append_string(cache->content_name, tmp);
-		mc_delete(mc, cache->content_name->ptr, cache->content_name->used, 0);
 	} else {
 		cachenumber --;
 		usedmemory -= cache->size;
 		cache->size = 0;
 		cache->inuse = 0;
-		mc_delete(mc, cache->content_name->ptr, cache->content_name->used, 0);
 	}
+	if (mc) mc_delete(mc, cache->content_name->ptr, cache->content_name->used, 0);
 	if (cache->content_type == NULL) cache->content_type = buffer_init();
 	if (cache->etag == NULL) cache->etag = buffer_init();
 	if (cache->path == NULL) cache->path = buffer_init();
@@ -724,11 +723,11 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 	reqcount ++;
 	content = buffer_init();
 
-	if (success != 0 && cache != NULL && p->conf.mc) {
+	if (success != 0 && cache != NULL) {
 		void *r;
 		size_t retlen;
 		buffer_prepare_copy(content, cache->size);
-		if (NULL == (r = mc_aget2(p->conf.mc, CONST_BUF_LEN(cache->content_name), &retlen))) {
+		if (!p->conf.mc || NULL == (r = mc_aget2(p->conf.mc, CONST_BUF_LEN(cache->content_name), &retlen))) {
 			init_cache_entry(cache, p->conf.mc, p->conf.mc_namespace);
 			buffer_reset(content);
 		} else {
@@ -792,7 +791,7 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 			void *r;
 			size_t retlen;
 			buffer_prepare_copy(content, cache->size);
-			if (NULL == (r = mc_aget2(p->conf.mc, CONST_BUF_LEN(cache->content_name), &retlen))) {
+			if (!p->conf.mc || NULL == (r = mc_aget2(p->conf.mc, CONST_BUF_LEN(cache->content_name), &retlen))) {
 				buffer_reset(content);
 			} else {
 				buffer_copy_memory(content, r, retlen);
