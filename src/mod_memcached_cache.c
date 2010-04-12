@@ -44,7 +44,10 @@ SUCH DAMAGE.
 #include "response.h"
 #include "status_counter.h"
 
-#include <memcache.h>
+#include <libmemcached/memcached.h>
+#include <libmemcached/get.h>
+#include <libmemcached/storage.h>
+#include <libmemcached/delete.h>
 
 #define LIGHTTPD_V14 1
 
@@ -80,7 +83,7 @@ typedef struct {
 	unsigned int expires;
 	array  *filetypes;
 
-	struct memcache *mc;
+	memcached_st *memc;
 	array  *mc_hosts;
 	buffer *mc_namespace;
 } plugin_config;
@@ -115,7 +118,7 @@ struct cache_entry{
 	short inuse;
 	/* cache data */
 	buffer *content_name;
-	struct memcache *mc;
+	memcached_st *memc;
 	off_t size;
 
 	/* pointer for next when hash collided */
@@ -170,12 +173,12 @@ static struct cache_entry *global_cache_entry_init(void) {
 static void free_cache_entry(struct cache_entry *cache) {
 	if (cache == NULL) return;
 	cachenumber --;
-	if (usedmemory >= cache->size)
+	if (usedmemory >= (uint64_t)cache->size)
 		usedmemory -= cache->size;
 	else
 		usedmemory = 0;
-	if (!buffer_is_empty(cache->content_name) && cache->mc)
-		mc_delete(cache->mc, cache->content_name->ptr, cache->content_name->used, 0);
+	if (!buffer_is_empty(cache->content_name) && cache->memc)
+		memcached_delete(cache->memc, cache->content_name->ptr, cache->content_name->used, 0);
 	buffer_free(cache->content_name);
 	buffer_free(cache->content_type);
 	buffer_free(cache->etag);
@@ -185,7 +188,7 @@ static void free_cache_entry(struct cache_entry *cache) {
 }
 
 /* reset cache_entry to initial state */
-static void init_cache_entry(struct cache_entry *cache, struct memcache *mc, buffer *namespace) {
+static void init_cache_entry(struct cache_entry *cache, memcached_st *memc, buffer *namespace) {
 	if (cache == NULL) return;
 	if (cache->content_name == NULL) {
 		char tmp[10];
@@ -194,61 +197,19 @@ static void init_cache_entry(struct cache_entry *cache, struct memcache *mc, buf
 		buffer_append_string(cache->content_name, tmp);
 	} else {
 		cachenumber --;
-		usedmemory -= cache->size;
+		if (usedmemory >= (uint64_t)cache->size)
+			usedmemory -= cache->size;
+		else
+			usedmemory = 0;
 		cache->size = 0;
 		cache->inuse = 0;
 	}
-	if (mc) mc_delete(mc, cache->content_name->ptr, cache->content_name->used, 0);
+	if (memc) memcached_delete(memc, cache->content_name->ptr, cache->content_name->used, 0);
 	if (cache->content_type == NULL) cache->content_type = buffer_init();
 	if (cache->etag == NULL) cache->etag = buffer_init();
 	if (cache->path == NULL) cache->path = buffer_init();
 	if (cache->mtime == NULL) cache->mtime = buffer_init();
-	cache->mc = mc;
-}
-
-static int memcache_err_func(MCM_ERR_FUNC_ARGS) {
-
-	const struct memcache_ctxt *ctxt;
-	struct memcache_err_ctxt *ectxt;
-
-	MCM_ERR_INIT_CTXT(ctxt, ectxt);
-
-	if (ectxt->errnum == EAGAIN)
-		errno = ECONNRESET;
-
-	switch (ectxt->severity) {
-		case MCM_ERR_LVL_INFO:
-			break;
-		case MCM_ERR_LVL_NOTICE:
-			break;
-		case MCM_ERR_LVL_WARN:
-			break;
-		case MCM_ERR_LVL_ERR:
-			/* try to continue */
-			ectxt->cont = 'y';
-			break;
-		case MCM_ERR_LVL_FATAL:
-		default:
-			ectxt->cont = 'y';
-			break;
-	}
-
-	/*
-	* ectxt->errmsg - per error message passed along via one of the MCM_*_MSG() macros (optional)
-	* ectxt->errstr - memcache error string (optional, though almost always set)
-	*/
-	if (ectxt->errstr != NULL && ectxt->errmsg != NULL)
-		fprintf(stderr, "memcached: %s():%u: %s: %.*s\n", ectxt->funcname, ectxt->lineno, ectxt->errstr,
-			(int)ectxt->errlen, ectxt->errmsg);
-	else if (ectxt->errstr == NULL && ectxt->errmsg != NULL)
-		fprintf(stderr, "memcached: %s():%u: %.*s\n", ectxt->funcname, ectxt->lineno, (int)ectxt->errlen,
-			ectxt->errmsg);
-	else if (ectxt->errstr != NULL && ectxt->errmsg == NULL)
-		fprintf(stderr, "memcached: %s():%u: %s\n", ectxt->funcname, ectxt->lineno, ectxt->errstr);
-	else
-		fprintf(stderr, "memcached: %s():%u\n", ectxt->funcname, ectxt->lineno);
-
-	return 0;
+	cache->memc = memc;
 }
 
 /* init the plugin data */
@@ -265,11 +226,6 @@ INIT_FUNC(mod_memcached_cache_init) {
 	usedmemory = 0;
 	plru = NULL;
 	
-	mcErrSetup(memcache_err_func);
-	/*! delete eventual log filters */
-	mc_err_filter_del(MCM_ERR_LVL_INFO);
-	mc_err_filter_del(MCM_ERR_LVL_NOTICE);
-
 	return p;
 }
 
@@ -307,7 +263,7 @@ FREE_FUNC(mod_memcached_cache_free) {
 			array_free(s->filetypes);
 			buffer_free(s->mc_namespace);
 			array_free(s->mc_hosts);
-			if (s->mc) mc_free(s->mc);
+			if (s->memc) memcached_free(s->memc);
 			free(s);
 		}
 		free(p->config_storage);
@@ -391,15 +347,20 @@ SETDEFAULTS_FUNC(mod_memcached_cache_set_defaults) {
 
 		if (s->mc_hosts->used) {
 			size_t k;
-			s->mc = mc_new();
+			s->memc = memcached_create(NULL);
 
 			for (k = 0; k < s->mc_hosts->used; k++) {
 				data_string *ds = (data_string *)s->mc_hosts->data[k];
+				memcached_server_st *servers;
+				memcached_return_t rc;
 
-				if (0 != mc_server_add4(s->mc, ds->value->ptr)) {
-					log_error_write(srv, __FILE__, __LINE__, "sb",
+				servers = memcached_servers_parse(ds->value->ptr);
+				rc = memcached_server_push(s->memc, servers);
+				memcached_server_list_free(servers);
+				if (rc != MEMCACHED_SUCCESS && rc != MEMCACHED_SOME_ERRORS) {
+					log_error_write(srv, __FILE__, __LINE__, "ss",
 						"connection to host failed:",
-						ds->value);
+						memcached_strerror(s->memc, rc));
 					return HANDLER_ERROR;
 				}
 			}
@@ -434,7 +395,7 @@ static int mod_memcached_cache_patch_connection(server *srv, connection *con, pl
 	PATCH_OPTION(filetypes);
 	PATCH_OPTION(thresold);
 	PATCH_OPTION(mc_namespace);
-	PATCH_OPTION(mc);
+	PATCH_OPTION(memc);
 	
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -465,8 +426,7 @@ static int mod_memcached_cache_patch_connection(server *srv, connection *con, pl
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_MEMCACHED_CACHE_NAMESPACE))) {
 				PATCH_OPTION(mc_namespace);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_MEMCACHED_CACHE_HOSTS))) {
-				PATCH_OPTION(mc);
-				
+				PATCH_OPTION(memc);
 			}
 		}
 	}
@@ -764,12 +724,11 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 	
 	if (p->conf.enable == 0 || p->conf.maxfilesize == 0) return HANDLER_GO_ON;
 
+	if (!p->conf.memc) return HANDLER_GO_ON;
+
 	if (con->conf.log_request_handling) {
 		log_error_write(srv, __FILE__, __LINE__, "s", "-- mod_memcached_cache_uri_handler called");
 	}
-
-	if (p->conf.mc)
-		mc_server_activate_all(p->conf.mc);
 
 	hash = hashme(con->physical.path);
 	cache = check_memcached(srv, con, &success, hash);
@@ -777,13 +736,14 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 	content = buffer_init();
 
 	if (success != 0 && cache != NULL) {
-		void *r;
+		char *r;
 		size_t retlen;
-		buffer_prepare_copy(content, cache->size);
-		if (!p->conf.mc || NULL == (r = mc_aget2(p->conf.mc, CONST_BUF_LEN(cache->content_name), &retlen))) {
-			init_cache_entry(cache, p->conf.mc, p->conf.mc_namespace);
-			buffer_reset(content);
-		} else {
+		uint32_t flags;
+		memcached_return_t rc;
+
+		r = memcached_get(p->conf.memc, CONST_BUF_LEN(cache->content_name), &retlen, &flags, &rc);
+		if (rc == MEMCACHED_SUCCESS) {
+			buffer_prepare_copy(content, retlen+1);
 			buffer_copy_memory(content, r, retlen);
 			free(r);
 		}
@@ -843,10 +803,12 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 		if (cache->inuse && buffer_is_equal(con->physical.etag, cache->etag)) {
 			void *r;
 			size_t retlen;
-			buffer_prepare_copy(content, cache->size);
-			if (!p->conf.mc || NULL == (r = mc_aget2(p->conf.mc, CONST_BUF_LEN(cache->content_name), &retlen))) {
-				buffer_reset(content);
-			} else {
+			uint32_t flags;
+			memcached_return_t rc;
+
+			r = memcached_get(p->conf.memc, CONST_BUF_LEN(cache->content_name), &retlen, &flags, &rc);
+			if (rc == MEMCACHED_SUCCESS) {
+				buffer_prepare_copy(content, retlen+1);
 				buffer_copy_memory(content, r, retlen);
 				free(r);
 			}
@@ -860,23 +822,21 @@ handler_t mod_memcached_cache_uri_handler(server *srv, connection *con, void *p_
 			}
 
 			/* initialze cache's buffer if needed */
-			init_cache_entry(cache, p->conf.mc, p->conf.mc_namespace);
+			init_cache_entry(cache, p->conf.memc, p->conf.mc_namespace);
 			buffer_prepare_copy(content, sce->st.st_size);
 			if (readfile_into_buffer(srv, con, sce->st.st_size, content)) {
 				goto handler_go_on;
 			}
 
-			if (p->conf.mc)
-				mc_set(p->conf.mc, CONST_BUF_LEN(cache->content_name), content->ptr, sce->st.st_size, p->conf.expires, 0);
+			memcached_set(p->conf.memc, CONST_BUF_LEN(cache->content_name), content->ptr, content->used, p->conf.expires, 0);
 
-			cache->size = sce->st.st_size;
+			cache->size = content->used;
 			usedmemory += cache->size;
 			/* increase cachenumber if needed */
 			if (cache->inuse == 0) {
 				cachenumber ++;
 				cache->inuse = 1;
 			}
-
 
 			if (sce->content_type->used == 0) {
 				buffer_copy_string_len(cache->content_type, CONST_STR_LEN("application/octet-stream"));

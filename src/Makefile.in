@@ -225,7 +225,8 @@ mod_fastcgi_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
 	$(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=link $(CCLD) \
 	$(AM_CFLAGS) $(CFLAGS) $(mod_fastcgi_la_LDFLAGS) $(LDFLAGS) -o \
 	$@
-mod_memcached_cache_la_DEPENDENCIES = $(am__DEPENDENCIES_2)
+mod_memcached_cache_la_DEPENDENCIES = $(am__DEPENDENCIES_1) \
+	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_2)
 am_mod_memcached_cache_la_OBJECTS = mod_memcached_cache.lo
 mod_memcached_cache_la_OBJECTS = $(am_mod_memcached_cache_la_OBJECTS)
 mod_memcached_cache_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
@@ -535,6 +536,7 @@ LBER_LIB = @LBER_LIB@
 LD = @LD@
 LDAP_LIB = @LDAP_LIB@
 LDFLAGS = @LDFLAGS@
+LIBMEMCACHED_LIB = @LIBMEMCACHED_LIB@
 LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
@@ -685,9 +687,6 @@ lib_LTLIBRARIES = $(am__append_1) mod_flv_streaming.la mod_evasive.la \
 @NO_RDYNAMIC_TRUE@liblightcomp_la_LIBADD = $(PCRE_LIB) $(SSL_LIB) $(FAM_LIBS)
 @NO_RDYNAMIC_FALSE@common_libadd = 
 @NO_RDYNAMIC_TRUE@common_libadd = liblightcomp.la
-mod_memcached_cache_la_SOURCES = mod_memcached_cache.c
-mod_memcached_cache_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_memcached_cache_la_LIBADD = $(MEMCACHE_LIB) $(common_libadd)
 mod_flv_streaming_la_SOURCES = mod_flv_streaming.c
 mod_flv_streaming_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_flv_streaming_la_LIBADD = $(common_libadd)
@@ -716,6 +715,9 @@ mod_mysql_vhost_la_CPPFLAGS = $(MYSQL_INCLUDE)
 mod_cgi_la_SOURCES = mod_cgi.c
 mod_cgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_cgi_la_LIBADD = $(common_libadd)
+mod_memcached_cache_la_SOURCES = mod_memcached_cache.c
+mod_memcached_cache_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_memcached_cache_la_LIBADD = $(LIBMEMCACHED_LIB) $(common_libadd)
 mod_scgi_la_SOURCES = mod_scgi.c
 mod_scgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_scgi_la_LIBADD = $(common_libadd)
@@ -918,14 +920,14 @@ mod_extforward.la: $(mod_extforward_la_OBJECTS) $(mod_extforward_la_DEPENDENCIES
 	$(AM_V_CCLD)$(mod_extforward_la_LINK) -rpath $(libdir) $(mod_extforward_la_OBJECTS) $(mod_extforward_la_LIBADD) $(LIBS)
 mod_fastcgi.la: $(mod_fastcgi_la_OBJECTS) $(mod_fastcgi_la_DEPENDENCIES) 
 	$(AM_V_CCLD)$(mod_fastcgi_la_LINK) -rpath $(libdir) $(mod_fastcgi_la_OBJECTS) $(mod_fastcgi_la_LIBADD) $(LIBS)
-mod_memcached_cache.la: $(mod_memcached_cache_la_OBJECTS) $(mod_memcached_cache_la_DEPENDENCIES) 
-	$(AM_V_CCLD)$(mod_memcached_cache_la_LINK) -rpath $(libdir) $(mod_memcached_cache_la_OBJECTS) $(mod_memcached_cache_la_LIBADD) $(LIBS)
 mod_flv_streaming.la: $(mod_flv_streaming_la_OBJECTS) $(mod_flv_streaming_la_DEPENDENCIES) 
 	$(AM_V_CCLD)$(mod_flv_streaming_la_LINK) -rpath $(libdir) $(mod_flv_streaming_la_OBJECTS) $(mod_flv_streaming_la_LIBADD) $(LIBS)
 mod_indexfile.la: $(mod_indexfile_la_OBJECTS) $(mod_indexfile_la_DEPENDENCIES) 
 	$(AM_V_CCLD)$(mod_indexfile_la_LINK) -rpath $(libdir) $(mod_indexfile_la_OBJECTS) $(mod_indexfile_la_LIBADD) $(LIBS)
 mod_magnet.la: $(mod_magnet_la_OBJECTS) $(mod_magnet_la_DEPENDENCIES) 
 	$(AM_V_CCLD)$(mod_magnet_la_LINK) -rpath $(libdir) $(mod_magnet_la_OBJECTS) $(mod_magnet_la_LIBADD) $(LIBS)
+mod_memcached_cache.la: $(mod_memcached_cache_la_OBJECTS) $(mod_memcached_cache_la_DEPENDENCIES) 
+	$(AM_V_CCLD)$(mod_memcached_cache_la_LINK) -rpath $(libdir) $(mod_memcached_cache_la_OBJECTS) $(mod_memcached_cache_la_LIBADD) $(LIBS)
 mod_mysql_vhost.la: $(mod_mysql_vhost_la_OBJECTS) $(mod_mysql_vhost_la_DEPENDENCIES) 
 	$(AM_V_CCLD)$(mod_mysql_vhost_la_LINK) -rpath $(libdir) $(mod_mysql_vhost_la_OBJECTS) $(mod_mysql_vhost_la_LIBADD) $(LIBS)
 mod_proxy.la: $(mod_proxy_la_OBJECTS) $(mod_proxy_la_DEPENDENCIES) 
@@ -1118,11 +1120,11 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_expire.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_extforward.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_fastcgi.Plo@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_memcached_cache.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_flv_streaming.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_indexfile.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_magnet_la-mod_magnet.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_magnet_la-mod_magnet_cache.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_memcached_cache.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_mysql_vhost_la-mod_mysql_vhost.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_proxy.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_redirect.Plo@am__quote@
