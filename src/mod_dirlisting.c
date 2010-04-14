@@ -1,3 +1,11 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+#include <errno.h>
+#include <stdio.h>
+#include <time.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -7,16 +15,9 @@
 #include "response.h"
 #include "stat_cache.h"
 #include "stream.h"
+#include "etag.h"
 
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
-#include <dirent.h>
-#include <assert.h>
-#include <errno.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <time.h>
+#include "sys-strings.h"
 
 /**
  * this is a dirlisting for a lighttpd plugin
@@ -27,11 +28,12 @@
 #include <sys/syslimits.h>
 #endif
 
-#ifdef HAVE_ATTR_ATTRIBUTES_H
+#ifdef HAVE_XATTR
 #include <attr/attributes.h>
 #endif
 
-#include "version.h"
+#include "sys-files.h"
+#include "sys-strings.h"
 
 /* plugin config for all request/connections */
 
@@ -54,11 +56,8 @@ typedef struct {
 	unsigned short hide_dot_files;
 	unsigned short show_readme;
 	unsigned short hide_readme_file;
-	unsigned short encode_readme;
 	unsigned short show_header;
 	unsigned short hide_header_file;
-	unsigned short encode_header;
-	unsigned short auto_layout;
 
 	excludes_buffer *excludes;
 
@@ -72,6 +71,7 @@ typedef struct {
 
 	buffer *tmp_buf;
 	buffer *content_charset;
+	buffer *path;
 
 	plugin_config **config_storage;
 
@@ -153,15 +153,18 @@ static void excludes_buffer_free(excludes_buffer *exb) {
 INIT_FUNC(mod_dirlisting_init) {
 	plugin_data *p;
 
+	UNUSED(srv);
+
 	p = calloc(1, sizeof(*p));
 
 	p->tmp_buf = buffer_init();
 	p->content_charset = buffer_init();
+	p->path = buffer_init();
 
 	return p;
 }
 
-/* detroy the plugin data */
+/* destroy the plugin data */
 FREE_FUNC(mod_dirlisting_free) {
 	plugin_data *p = p_d;
 
@@ -187,6 +190,7 @@ FREE_FUNC(mod_dirlisting_free) {
 	}
 
 	buffer_free(p->tmp_buf);
+	buffer_free(p->path);
 	buffer_free(p->content_charset);
 
 	free(p);
@@ -197,8 +201,8 @@ FREE_FUNC(mod_dirlisting_free) {
 static int parse_config_entry(server *srv, plugin_config *s, array *ca, const char *option) {
 	data_unset *du;
 
-	if (NULL != (du = array_get_element(ca, option))) {
-		data_array *da;
+	if (NULL != (du = array_get_element(ca, option, strlen(option)))) {
+		data_array *da = (data_array *)du;
 		size_t j;
 
 		if (du->type != TYPE_ARRAY) {
@@ -248,9 +252,6 @@ static int parse_config_entry(server *srv, plugin_config *s, array *ca, const ch
 #define CONFIG_HIDE_HEADER_FILE "dir-listing.hide-header-file"
 #define CONFIG_DIR_LISTING      "server.dir-listing"
 #define CONFIG_SET_FOOTER       "dir-listing.set-footer"
-#define CONFIG_ENCODE_README    "dir-listing.encode-readme"
-#define CONFIG_ENCODE_HEADER    "dir-listing.encode-header"
-#define CONFIG_AUTO_LAYOUT      "dir-listing.auto-layout"
 
 
 SETDEFAULTS_FUNC(mod_dirlisting_set_defaults) {
@@ -268,10 +269,7 @@ SETDEFAULTS_FUNC(mod_dirlisting_set_defaults) {
 		{ CONFIG_SHOW_HEADER,      NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION }, /* 7 */
 		{ CONFIG_HIDE_HEADER_FILE, NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION }, /* 8 */
 		{ CONFIG_DIR_LISTING,      NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION }, /* 9 */
-		{ CONFIG_SET_FOOTER,       NULL, T_CONFIG_STRING, T_CONFIG_SCOPE_CONNECTION },  /* 10 */
-		{ CONFIG_ENCODE_README,    NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION }, /* 11 */
-		{ CONFIG_ENCODE_HEADER,    NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION }, /* 12 */
-		{ CONFIG_AUTO_LAYOUT,      NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION }, /* 13 */
+		{ CONFIG_SET_FOOTER,       NULL, T_CONFIG_STRING, T_CONFIG_SCOPE_CONNECTION }, /* 10 */
 
 		{ NULL,                          NULL, T_CONFIG_UNSET, T_CONFIG_SCOPE_UNSET }
 	};
@@ -293,10 +291,6 @@ SETDEFAULTS_FUNC(mod_dirlisting_set_defaults) {
 		s->hide_readme_file = 0;
 		s->show_header = 0;
 		s->hide_header_file = 0;
-		s->encode_readme = 1;
-		s->encode_header = 1;
-		s->auto_layout = 1;
-
 		s->encoding = buffer_init();
 		s->set_footer = buffer_init();
 
@@ -311,9 +305,6 @@ SETDEFAULTS_FUNC(mod_dirlisting_set_defaults) {
 		cv[8].destination = &(s->hide_header_file);
 		cv[9].destination = &(s->dir_listing); /* old name */
 		cv[10].destination = s->set_footer;
-		cv[11].destination = &(s->encode_readme);
-		cv[12].destination = &(s->encode_header);
-		cv[13].destination = &(s->auto_layout);
 
 		p->config_storage[i] = s;
 		ca = ((data_config *)srv->config_context->data[i])->value;
@@ -328,25 +319,20 @@ SETDEFAULTS_FUNC(mod_dirlisting_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_dirlisting_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(dir_listing);
-	PATCH(external_css);
-	PATCH(hide_dot_files);
-	PATCH(encoding);
-	PATCH(show_readme);
-	PATCH(hide_readme_file);
-	PATCH(show_header);
-	PATCH(hide_header_file);
-	PATCH(excludes);
-	PATCH(set_footer);
-	PATCH(encode_readme);
-	PATCH(encode_header);
-	PATCH(auto_layout);
+	PATCH_OPTION(dir_listing);
+	PATCH_OPTION(external_css);
+	PATCH_OPTION(hide_dot_files);
+	PATCH_OPTION(encoding);
+	PATCH_OPTION(show_readme);
+	PATCH_OPTION(hide_readme_file);
+	PATCH_OPTION(show_header);
+	PATCH_OPTION(hide_header_file);
+	PATCH_OPTION(excludes);
+	PATCH_OPTION(set_footer);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -362,38 +348,31 @@ static int mod_dirlisting_patch_connection(server *srv, connection *con, plugin_
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_ACTIVATE)) ||
 			    buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_DIR_LISTING))) {
-				PATCH(dir_listing);
+				PATCH_OPTION(dir_listing);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_HIDE_DOTFILES))) {
-				PATCH(hide_dot_files);
+				PATCH_OPTION(hide_dot_files);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_EXTERNAL_CSS))) {
-				PATCH(external_css);
+				PATCH_OPTION(external_css);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_ENCODING))) {
-				PATCH(encoding);
+				PATCH_OPTION(encoding);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_SHOW_README))) {
-				PATCH(show_readme);
+				PATCH_OPTION(show_readme);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_HIDE_README_FILE))) {
-				PATCH(hide_readme_file);
+				PATCH_OPTION(hide_readme_file);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_SHOW_HEADER))) {
-				PATCH(show_header);
+				PATCH_OPTION(show_header);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_HIDE_HEADER_FILE))) {
-				PATCH(hide_header_file);
+				PATCH_OPTION(hide_header_file);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_SET_FOOTER))) {
-				PATCH(set_footer);
+				PATCH_OPTION(set_footer);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_EXCLUDE))) {
-				PATCH(excludes);
-			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_ENCODE_README))) {
-				PATCH(encode_readme);
-			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_ENCODE_HEADER))) {
-				PATCH(encode_header);
-			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_AUTO_LAYOUT))) {
-				PATCH(auto_layout);
+				PATCH_OPTION(excludes);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 typedef struct {
 	size_t  namelen;
@@ -481,58 +460,57 @@ static int http_list_directory_sizefmt(char *buf, off_t size) {
 static void http_list_directory_header(server *srv, connection *con, plugin_data *p, buffer *out) {
 	UNUSED(srv);
 
-	if (p->conf.auto_layout) {
+	buffer_append_string_len(out, CONST_STR_LEN(
+		"<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n"
+		"<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\">\n"
+		"<head>\n"
+		"<title>Index of "
+	));
+	buffer_append_string_encoded(out, CONST_BUF_LEN(con->uri.path), ENCODING_MINIMAL_XML);
+	buffer_append_string_len(out, CONST_STR_LEN("</title>\n"));
+
+	if (p->conf.external_css->used > 1) {
+		buffer_append_string_len(out, CONST_STR_LEN("<link rel=\"stylesheet\" type=\"text/css\" href=\""));
+		buffer_append_string_buffer(out, p->conf.external_css);
+		buffer_append_string_len(out, CONST_STR_LEN("\" />\n"));
+	} else {
 		buffer_append_string_len(out, CONST_STR_LEN(
-			"<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n"
-			"<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\">\n"
-			"<head>\n"
-			"<title>Index of "
+			"<style type=\"text/css\">\n"
+			"a, a:active {text-decoration: none; color: blue;}\n"
+			"a:visited {color: #48468F;}\n"
+			"a:hover, a:focus {text-decoration: underline; color: red;}\n"
+			"body {background-color: #F5F5F5;}\n"
+			"h2 {margin-bottom: 12px;}\n"
+			"table {margin-left: 12px;}\n"
+			"th, td {"
+			" font: 90% monospace;"
+			" text-align: left;"
+			"}\n"
+			"th {"
+			" font-weight: bold;"
+			" padding-right: 14px;"
+			" padding-bottom: 3px;"
+			"}\n"
+
+			"td {padding-right: 14px;}\n"
+			"td.s, th.s {text-align: right;}\n"
+			"div.list {"
+			" background-color: white;"
+			" border-top: 1px solid #646464;"
+			" border-bottom: 1px solid #646464;"
+			" padding-top: 10px;"
+			" padding-bottom: 14px;"
+			"}\n"
+			"div.foot {"
+			" font: 90% monospace;"
+			" color: #787878;"
+			" padding-top: 4px;"
+			"}\n"
+			"</style>\n"
 		));
-		buffer_append_string_encoded(out, CONST_BUF_LEN(con->uri.path), ENCODING_MINIMAL_XML);
-		buffer_append_string_len(out, CONST_STR_LEN("</title>\n"));
-
-		if (p->conf.external_css->used > 1) {
-			buffer_append_string_len(out, CONST_STR_LEN("<link rel=\"stylesheet\" type=\"text/css\" href=\""));
-			buffer_append_string_buffer(out, p->conf.external_css);
-			buffer_append_string_len(out, CONST_STR_LEN("\" />\n"));
-		} else {
-			buffer_append_string_len(out, CONST_STR_LEN(
-				"<style type=\"text/css\">\n"
-				"a, a:active {text-decoration: none; color: blue;}\n"
-				"a:visited {color: #48468F;}\n"
-				"a:hover, a:focus {text-decoration: underline; color: red;}\n"
-				"body {background-color: #F5F5F5;}\n"
-				"h2 {margin-bottom: 12px;}\n"
-				"table {margin-left: 12px;}\n"
-				"th, td {"
-				" font: 90% monospace;"
-				" text-align: left;"
-				"}\n"
-				"th {"
-				" font-weight: bold;"
-				" padding-right: 14px;"
-				" padding-bottom: 3px;"
-				"}\n"
-				"td {padding-right: 14px;}\n"
-				"td.s, th.s {text-align: right;}\n"
-				"div.list {"
-				" background-color: white;"
-				" border-top: 1px solid #646464;"
-				" border-bottom: 1px solid #646464;"
-				" padding-top: 10px;"
-				" padding-bottom: 14px;"
-				"}\n"
-				"div.foot {"
-				" font: 90% monospace;"
-				" color: #787878;"
-				" padding-top: 4px;"
-				"}\n"
-				"</style>\n"
-			));
-		}
-
-		buffer_append_string_len(out, CONST_STR_LEN("</head>\n<body>\n"));
 	}
+
+	buffer_append_string_len(out, CONST_STR_LEN("</head>\n<body>\n"));
 
 	/* HEADER.txt */
 	if (p->conf.show_header) {
@@ -540,17 +518,13 @@ static void http_list_directory_header(server *srv, connection *con, plugin_data
 		/* if we have a HEADER file, display it in <pre class="header"></pre> */
 
 		buffer_copy_string_buffer(p->tmp_buf, con->physical.path);
-		BUFFER_APPEND_SLASH(p->tmp_buf);
+		PATHNAME_APPEND_SLASH(p->tmp_buf);
 		buffer_append_string_len(p->tmp_buf, CONST_STR_LEN("HEADER.txt"));
 
 		if (-1 != stream_open(&s, p->tmp_buf)) {
-			if (p->conf.encode_header) {
-				buffer_append_string_len(out, CONST_STR_LEN("<pre class=\"header\">"));
-				buffer_append_string_encoded(out, s.start, s.size, ENCODING_MINIMAL_XML);
-				buffer_append_string_len(out, CONST_STR_LEN("</pre>"));
-			} else {
-				buffer_append_string_len(out, s.start, s.size);
-			}
+			buffer_append_string_len(out, CONST_STR_LEN("<pre class=\"header\">"));
+			buffer_append_string_encoded(out, s.start, s.size, ENCODING_MINIMAL_XML);
+			buffer_append_string_len(out, CONST_STR_LEN("</pre>"));
 		}
 		stream_close(&s);
 	}
@@ -593,40 +567,34 @@ static void http_list_directory_footer(server *srv, connection *con, plugin_data
 		/* if we have a README file, display it in <pre class="readme"></pre> */
 
 		buffer_copy_string_buffer(p->tmp_buf,  con->physical.path);
-		BUFFER_APPEND_SLASH(p->tmp_buf);
+		PATHNAME_APPEND_SLASH(p->tmp_buf);
 		buffer_append_string_len(p->tmp_buf, CONST_STR_LEN("README.txt"));
 
 		if (-1 != stream_open(&s, p->tmp_buf)) {
-			if (p->conf.encode_readme) {
-				buffer_append_string_len(out, CONST_STR_LEN("<pre class=\"readme\">"));
-				buffer_append_string_encoded(out, s.start, s.size, ENCODING_MINIMAL_XML);
-				buffer_append_string_len(out, CONST_STR_LEN("</pre>"));
-			} else {
-				buffer_append_string_len(out, s.start, s.size);
-			}
+			buffer_append_string_len(out, CONST_STR_LEN("<pre class=\"readme\">"));
+			buffer_append_string_encoded(out, s.start, s.size, ENCODING_MINIMAL_XML);
+			buffer_append_string_len(out, CONST_STR_LEN("</pre>"));
 		}
 		stream_close(&s);
 	}
 
-	if(p->conf.auto_layout) {
-		buffer_append_string_len(out, CONST_STR_LEN(
-			"<div class=\"foot\">"
-		));
+	buffer_append_string_len(out, CONST_STR_LEN(
+		"<div class=\"foot\">"
+	));
 
-		if (p->conf.set_footer->used > 1) {
-			buffer_append_string_buffer(out, p->conf.set_footer);
-		} else if (buffer_is_empty(con->conf.server_tag)) {
-			buffer_append_string_len(out, CONST_STR_LEN(PACKAGE_DESC));
-		} else {
-			buffer_append_string_buffer(out, con->conf.server_tag);
-		}
-
-		buffer_append_string_len(out, CONST_STR_LEN(
-			"</div>\n"
-			"</body>\n"
-			"</html>\n"
-		));
+	if (p->conf.set_footer->used > 1) {
+		buffer_append_string_buffer(out, p->conf.set_footer);
+	} else if (buffer_is_empty(con->conf.server_tag)) {
+		buffer_append_string_len(out, CONST_STR_LEN(PACKAGE_NAME "/" PACKAGE_VERSION));
+	} else {
+		buffer_append_string_buffer(out, con->conf.server_tag);
 	}
+
+	buffer_append_string_len(out, CONST_STR_LEN(
+		"</div>\n"
+		"</body>\n"
+		"</html>\n"
+	));
 }
 
 static int http_list_directory(server *srv, connection *con, plugin_data *p, buffer *dir) {
@@ -634,7 +602,6 @@ static int http_list_directory(server *srv, connection *con, plugin_data *p, buf
 	buffer *out;
 	struct dirent *dent;
 	struct stat st;
-	char *path, *path_file;
 	size_t i;
 	int hide_dotfiles = p->conf.hide_dot_files;
 	dirls_list_t dirs, files, *list;
@@ -644,6 +611,7 @@ static int http_list_directory(server *srv, connection *con, plugin_data *p, buf
 	size_t k;
 	const char *content_type;
 	long name_max;
+
 #ifdef HAVE_XATTR
 	char attrval[128];
 	int attrlen;
@@ -652,34 +620,36 @@ static int http_list_directory(server *srv, connection *con, plugin_data *p, buf
 	struct tm tm;
 #endif
 
-	if (dir->used == 0) return -1;
+	/* empty pathname, never ... */
+	if (buffer_is_empty(dir)) return -1;
 
-	i = dir->used - 1;
-
+	/* max-length for the opendir */
 #ifdef HAVE_PATHCONF
 	if (-1 == (name_max = pathconf(dir->ptr, _PC_NAME_MAX))) {
 #ifdef NAME_MAX
 		name_max = NAME_MAX;
 #else
-		name_max = 255; /* stupid default */
+		name_max = 256; /* stupid default */
 #endif
 	}
-#elif defined __WIN32
+#elif defined _WIN32
 	name_max = FILENAME_MAX;
 #else
 	name_max = NAME_MAX;
 #endif
 
-	path = malloc(dir->used + name_max);
-	assert(path);
-	strcpy(path, dir->ptr);
-	path_file = path + i;
+	buffer_copy_string_buffer(p->path, dir);
+	PATHNAME_APPEND_SLASH(p->path);
 
-	if (NULL == (dp = opendir(path))) {
+#ifdef _WIN32
+	/* append *.* to the path */
+	buffer_append_string_len(p->path, CONST_STR_LEN("*.*"));
+#endif
+
+	if (NULL == (dp = opendir(p->path->ptr))) {
 		log_error_write(srv, __FILE__, __LINE__, "sbs",
 			"opendir failed:", dir, strerror(errno));
 
-		free(path);
 		return -1;
 	}
 
@@ -750,9 +720,15 @@ static int http_list_directory(server *srv, connection *con, plugin_data *p, buf
 		 */
 		if (i > (size_t)name_max) continue;
 
-		memcpy(path_file, dent->d_name, i + 1);
-		if (stat(path, &st) != 0)
+		/* build the dirname */
+		buffer_copy_string_buffer(p->path, dir);
+		PATHNAME_APPEND_SLASH(p->path);
+		buffer_append_string(p->path, dent->d_name);
+
+		if (stat(p->path->ptr, &st) != 0) {
+			fprintf(stderr, "%s.%d: %s, %s\r\n", __FILE__, __LINE__, p->path->ptr, strerror(errno));
 			continue;
+		}
 
 		list = &files;
 		if (S_ISDIR(st.st_mode))
@@ -778,7 +754,7 @@ static int http_list_directory(server *srv, connection *con, plugin_data *p, buf
 
 	if (files.used) http_dirls_sort(files.ent, files.used);
 
-	out = chunkqueue_get_append_buffer(con->write_queue);
+	out = chunkqueue_get_append_buffer(con->send);
 	buffer_copy_string_len(out, CONST_STR_LEN("<?xml version=\"1.0\" encoding=\""));
 	if (buffer_is_empty(p->conf.encoding)) {
 		buffer_append_string_len(out, CONST_STR_LEN("iso-8859-1"));
@@ -815,12 +791,16 @@ static int http_list_directory(server *srv, connection *con, plugin_data *p, buf
 		tmp = files.ent[i];
 
 		content_type = NULL;
-#ifdef HAVE_XATTR
 
+#ifdef HAVE_XATTR
 		if (con->conf.use_xattr) {
-			memcpy(path_file, DIRLIST_ENT_NAME(tmp), tmp->namelen + 1);
+			/* build the dirname */
+			buffer_copy_string_buffer(p->path, dir);
+			PATHNAME_APPEND_SLASH(p->path);
+			buffer_append_string_len(p->path, DIRLIST_ENT_NAME(tmp), tmp->namelen);
+
 			attrlen = sizeof(attrval) - 1;
-			if (attr_get(path, "Content-Type", attrval, &attrlen, 0) == 0) {
+			if (attr_get(p->path->ptr, "Content-Type", attrval, &attrlen, 0) == 0) {
 				attrval[attrlen] = '\0';
 				content_type = attrval;
 			}
@@ -872,20 +852,21 @@ static int http_list_directory(server *srv, connection *con, plugin_data *p, buf
 
 	free(files.ent);
 	free(dirs.ent);
-	free(path);
 
 	http_list_directory_footer(srv, con, p, out);
 
 	/* Insert possible charset to Content-Type */
 	if (buffer_is_empty(p->conf.encoding)) {
-		response_header_overwrite(srv, con, CONST_STR_LEN("Content-Type"), CONST_STR_LEN("text/html"));
+		response_header_insert(srv, con, CONST_STR_LEN("Content-Type"), CONST_STR_LEN("text/html"));
 	} else {
 		buffer_copy_string_len(p->content_charset, CONST_STR_LEN("text/html; charset="));
 		buffer_append_string_buffer(p->content_charset, p->conf.encoding);
-		response_header_overwrite(srv, con, CONST_STR_LEN("Content-Type"), CONST_BUF_LEN(p->content_charset));
+		response_header_insert(srv, con, CONST_STR_LEN("Content-Type"), CONST_BUF_LEN(p->content_charset));
 	}
 
-	con->file_finished = 1;
+	con->send->bytes_in += out->used - 1;
+
+	con->send->is_closed = 1;
 
 	return 0;
 }
@@ -895,8 +876,8 @@ static int http_list_directory(server *srv, connection *con, plugin_data *p, buf
 URIHANDLER_FUNC(mod_dirlisting_subrequest) {
 	plugin_data *p = p_d;
 	stat_cache_entry *sce = NULL;
-
-	UNUSED(srv);
+	buffer *mtime;
+	data_string *ds;
 
 	/* we only handle GET, POST and HEAD */
 	switch(con->request.http_method) {
@@ -908,27 +889,44 @@ URIHANDLER_FUNC(mod_dirlisting_subrequest) {
 		return HANDLER_GO_ON;
 	}
 
-	if (con->mode != DIRECT) return HANDLER_GO_ON;
-
-	if (con->physical.path->used == 0) return HANDLER_GO_ON;
-	if (con->uri.path->used == 0) return HANDLER_GO_ON;
+	if (con->uri.path->used < 2) return HANDLER_GO_ON;
 	if (con->uri.path->ptr[con->uri.path->used - 2] != '/') return HANDLER_GO_ON;
+	if (con->physical.path->used == 0) return HANDLER_GO_ON;
 
 	mod_dirlisting_patch_connection(srv, con, p);
 
 	if (!p->conf.dir_listing) return HANDLER_GO_ON;
+
+	if (HANDLER_ERROR == stat_cache_get_entry(srv, con, con->physical.path, &sce)) {
+		/* just a second ago the file was still there */
+		return HANDLER_GO_ON;
+	}
+
+	if (!S_ISDIR(sce->st.st_mode)) return HANDLER_GO_ON;
 
 	if (con->conf.log_request_handling) {
 		log_error_write(srv, __FILE__, __LINE__,  "s",  "-- handling the request as Dir-Listing");
 		log_error_write(srv, __FILE__, __LINE__,  "sb", "URI          :", con->uri.path);
 	}
 
-	if (HANDLER_ERROR == stat_cache_get_entry(srv, con, con->physical.path, &sce)) {
-		fprintf(stderr, "%s.%d: %s\n", __FILE__, __LINE__, con->physical.path->ptr);
-		SEGFAULT();
+	/* perhaps this a cachable request
+	 * - we use the etag of the directory
+	 * */
+
+	etag_mutate(con->physical.etag, sce->etag);
+	response_header_overwrite(srv, con, CONST_STR_LEN("ETag"), CONST_BUF_LEN(con->physical.etag));
+
+	/* prepare header */
+	if (NULL == (ds = (data_string *)array_get_element(con->response.headers, CONST_STR_LEN("Last-Modified")))) {
+		mtime = strftime_cache_get(srv, sce->st.st_mtime);
+		response_header_overwrite(srv, con, CONST_STR_LEN("Last-Modified"), CONST_BUF_LEN(mtime));
+	} else {
+		mtime = ds->value;
 	}
 
-	if (!S_ISDIR(sce->st.st_mode)) return HANDLER_GO_ON;
+	if (HANDLER_FINISHED == http_response_handle_cachable(srv, con, mtime)) {
+		return HANDLER_FINISHED;
+	}
 
 	if (http_list_directory(srv, con, p, con->physical.path)) {
 		/* dirlisting failed */
@@ -943,13 +941,13 @@ URIHANDLER_FUNC(mod_dirlisting_subrequest) {
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_dirlisting_plugin_init(plugin *p);
-int mod_dirlisting_plugin_init(plugin *p) {
+LI_EXPORT int mod_dirlisting_plugin_init(plugin *p);
+LI_EXPORT int mod_dirlisting_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("dirlisting");
 
 	p->init        = mod_dirlisting_init;
-	p->handle_subrequest_start  = mod_dirlisting_subrequest;
+	p->handle_start_backend  = mod_dirlisting_subrequest;
 	p->set_defaults  = mod_dirlisting_set_defaults;
 	p->cleanup     = mod_dirlisting_free;
 

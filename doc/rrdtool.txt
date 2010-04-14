@@ -7,8 +7,8 @@ Module: mod_rrdtool
 -------------------
 
 :Author: Jan Kneschke
-:Date: $Date: 2004/08/29 09:43:49 $
-:Revision: $Revision: 1.1 $
+:Date: $Date: 2005-03-28T08:30:05.699628Z $
+:Revision: $Revision: 227 $
 
 :abstract:
   mod_rrdtool is used to monitor the traffic and load on the webserver
@@ -50,7 +50,7 @@ Generating Graphs
 ::
 
   #!/bin/sh
-
+  
   RRDTOOL=/usr/bin/rrdtool
   OUTDIR=/var/www/servers/www.example.org/pages/rrd/
   INFILE=/var/www/lighttpd.rrd

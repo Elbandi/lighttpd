@@ -1,3 +1,6 @@
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -5,9 +8,6 @@
 #include "plugin.h"
 
 #include "response.h"
-
-#include <stdlib.h>
-#include <string.h>
 
 /* plugin config for all request/connections */
 
@@ -48,6 +48,8 @@ static void handler_ctx_free(handler_ctx *hctx) {
 /* init the plugin data */
 INIT_FUNC(mod_setenv_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -120,15 +122,13 @@ SETDEFAULTS_FUNC(mod_setenv_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_setenv_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(request_header);
-	PATCH(response_header);
-	PATCH(environment);
+	PATCH_OPTION(request_header);
+	PATCH_OPTION(response_header);
+	PATCH_OPTION(environment);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -143,23 +143,30 @@ static int mod_setenv_patch_connection(server *srv, connection *con, plugin_data
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("setenv.add-request-header"))) {
-				PATCH(request_header);
+				PATCH_OPTION(request_header);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("setenv.add-response-header"))) {
-				PATCH(response_header);
+				PATCH_OPTION(response_header);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("setenv.add-environment"))) {
-				PATCH(environment);
+				PATCH_OPTION(environment);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 URIHANDLER_FUNC(mod_setenv_uri_handler) {
 	plugin_data *p = p_d;
 	size_t k;
 	handler_ctx *hctx;
+
+	mod_setenv_patch_connection(srv, con, p);
+
+	if (p->conf.request_header->used == 0 &&
+	    p->conf.environment->used == 0 &&
+	    p->conf.response_header->used == 0) {
+		return HANDLER_GO_ON;
+	}
 
 	if (con->plugin_ctx[p->id]) {
 		hctx = con->plugin_ctx[p->id];
@@ -174,8 +181,6 @@ URIHANDLER_FUNC(mod_setenv_uri_handler) {
 	}
 
 	hctx->handled = 1;
-
-	mod_setenv_patch_connection(srv, con, p);
 
 	for (k = 0; k < p->conf.request_header->used; k++) {
 		data_string *ds = (data_string *)p->conf.request_header->data[k];
@@ -215,7 +220,7 @@ URIHANDLER_FUNC(mod_setenv_uri_handler) {
 	return HANDLER_GO_ON;
 }
 
-CONNECTION_FUNC(mod_setenv_reset) {
+REQUESTDONE_FUNC(mod_setenv_reset) {
 	plugin_data *p = p_d;
 
 	UNUSED(srv);
@@ -230,13 +235,14 @@ CONNECTION_FUNC(mod_setenv_reset) {
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_setenv_plugin_init(plugin *p);
-int mod_setenv_plugin_init(plugin *p) {
+LI_EXPORT int mod_setenv_plugin_init(plugin *p);
+LI_EXPORT int mod_setenv_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("setenv");
 
 	p->init        = mod_setenv_init;
-	p->handle_uri_clean  = mod_setenv_uri_handler;
+	p->handle_uri_clean      = mod_setenv_uri_handler;
+	p->handle_start_backend  = mod_setenv_uri_handler;
 	p->set_defaults  = mod_setenv_set_defaults;
 	p->cleanup     = mod_setenv_free;
 

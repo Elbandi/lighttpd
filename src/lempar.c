@@ -213,7 +213,7 @@ static const char *yyRuleName[] = {
 #if 0
 const char *ParseTokenName(int tokenType){
 #ifndef NDEBUG
-  if( tokenType>0 && (size_t)tokenType<(sizeof(yyTokenName)/sizeof(yyTokenName[0])) ){
+  if( tokenType>0 && ((size_t)tokenType)<(sizeof(yyTokenName)/sizeof(yyTokenName[0])) ){
     return yyTokenName[tokenType];
   }else{
     return "Unknown";
@@ -460,7 +460,7 @@ static void yy_reduce(
   yymsp = &yypParser->yystack[yypParser->yyidx];
 #ifndef NDEBUG
   if( yyTraceFILE && yyruleno>=0
-        && (size_t)yyruleno<sizeof(yyRuleName)/sizeof(yyRuleName[0]) ){
+        && (size_t) yyruleno<sizeof(yyRuleName)/sizeof(yyRuleName[0]) ){
     fprintf(yyTraceFILE, "%sReduce [%s].\n", yyTracePrompt,
       yyRuleName[yyruleno]);
   }
@@ -516,8 +516,8 @@ static void yy_syntax_error(
   YYMINORTYPE yyminor            /* The minor type of the error token */
 ){
   ParseARG_FETCH;
-  UNUSED(yymajor);
-  UNUSED(yyminor);
+  ( (void) yymajor );
+  ( (void) yyminor );
 #define TOKEN (yyminor.yy0)
 %%
   ParseARG_STORE; /* Suppress warning about unused %extra_argument variable */
@@ -576,7 +576,7 @@ void Parse(
   /* (re)initialize the parser, if necessary */
   yypParser = (yyParser*)yyp;
   if( yypParser->yyidx<0 ){
-    if( yymajor==0 ) return;
+    if( yymajor==0 ) return;    /* Accept empty input */
     yypParser->yyidx = 0;
     yypParser->yyerrcnt = -1;
     yypParser->yystack[0].stateno = 0;

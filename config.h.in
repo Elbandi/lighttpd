@@ -27,16 +27,10 @@
 /* Define to 1 if you have the <errmsg.h> header file. */
 #undef HAVE_ERRMSG_H
 
-/* Define to 1 if you have the `FAMNoExists' function. */
-#undef HAVE_FAMNOEXISTS
-
-/* fam.h */
-#undef HAVE_FAM_H
-
-/* Define to 1 if you have the <fastcgi/fastcgi.h> header file. */
+/* fastcgi/fastcgi.h */
 #undef HAVE_FASTCGI_FASTCGI_H
 
-/* Define to 1 if you have the <fastcgi.h> header file. */
+/* fastcgi.h */
 #undef HAVE_FASTCGI_H
 
 /* Define to 1 if you have the <fcntl.h> header file. */
@@ -69,17 +63,20 @@
 /* Define to 1 if you have the `getuid' function. */
 #undef HAVE_GETUID
 
+/* glib.h */
+#undef HAVE_GLIB_H
+
 /* Define to 1 if you have the `gmtime_r' function. */
 #undef HAVE_GMTIME_R
+
+/* libglib */
+#undef HAVE_GTHREAD
 
 /* Define to 1 if you have the `inet_ntoa' function. */
 #undef HAVE_INET_NTOA
 
 /* Define to 1 if you have the `inet_ntop' function. */
 #undef HAVE_INET_NTOP
-
-/* Define to 1 if you have the `inet_pton' function. */
-#undef HAVE_INET_PTON
 
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
@@ -108,9 +105,6 @@
 /* libdl */
 #undef HAVE_LIBDL
 
-/* libfam */
-#undef HAVE_LIBFAM
-
 /* liblber */
 #undef HAVE_LIBLBER
 
@@ -119,6 +113,9 @@
 
 /* libpcre */
 #undef HAVE_LIBPCRE
+
+/* Define to 1 if you have the <libpq-fe.h> header file. */
+#undef HAVE_LIBPQ_FE_H
 
 /* Have libssl */
 #undef HAVE_LIBSSL
@@ -180,7 +177,7 @@
 /* Define to 1 if you have the `pathconf' function. */
 #undef HAVE_PATHCONF
 
-/* pcre.h */
+/* Define to 1 if you have the <pcre.h> header file. */
 #undef HAVE_PCRE_H
 
 /* Define to 1 if you have the `poll' function. */
@@ -197,6 +194,12 @@
 
 /* Define to 1 if you have the `posix_madvise' function. */
 #undef HAVE_POSIX_MADVISE
+
+/* postgresql support */
+#undef HAVE_POSTGRESQL
+
+/* Define to 1 if you have the <pthread.h> header file. */
+#undef HAVE_PTHREAD_H
 
 /* Define to 1 if you have the <pwd.h> header file. */
 #undef HAVE_PWD_H
@@ -268,11 +271,17 @@
 /* Define to 1 if you have the <string.h> header file. */
 #undef HAVE_STRING_H
 
+/* Define to 1 if you have the `strptime' function. */
+#undef HAVE_STRPTIME
+
 /* Define to 1 if you have the `strstr' function. */
 #undef HAVE_STRSTR
 
 /* Define to 1 if you have the `strtol' function. */
 #undef HAVE_STRTOL
+
+/* Define to 1 if you have the `strtoll' function. */
+#undef HAVE_STRTOLL
 
 /* Define to 1 if the system has the type `struct sockaddr_storage'. */
 #undef HAVE_STRUCT_SOCKADDR_STORAGE
@@ -376,9 +385,6 @@
 /* Define to 1 if you have the <zlib.h> header file. */
 #undef HAVE_ZLIB_H
 
-/* Using deprecated ldap api */
-#undef LDAP_DEPRECATED
-
 /* lighttpd-version-id */
 #undef LIGHTTPD_VERSION_ID
 
@@ -407,9 +413,6 @@
 
 /* Define to the one symbol short name of this package. */
 #undef PACKAGE_TARNAME
-
-/* Define to the home page for this package. */
-#undef PACKAGE_URL
 
 /* Define to the version of this package. */
 #undef PACKAGE_VERSION

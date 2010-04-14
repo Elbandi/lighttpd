@@ -1,3 +1,18 @@
+/*
+ * make sure _GNU_SOURCE is defined
+ */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <sys/types.h>
+
+#include <fcntl.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+
 #include "server.h"
 #include "connections.h"
 #include "response.h"
@@ -5,20 +20,14 @@
 #include "log.h"
 
 #include "plugin.h"
-#include <sys/types.h>
-
-#include <fcntl.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include <time.h>
-
 #ifdef HAVE_FORK
 /* no need for waitpid if we don't have fork */
 #include <sys/wait.h>
 #endif
+
+#include "sys-files.h"
+#include "sys-process.h"
+
 typedef struct {
 	buffer *path_rrdtool_bin;
 	buffer *path_rrd;
@@ -45,6 +54,8 @@ typedef struct {
 
 INIT_FUNC(mod_rrd_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -131,6 +142,8 @@ static int mod_rrd_create_pipe(server *srv, plugin_data *p) {
 		/* not needed */
 		close(to_rrdtool_fds[1]);
 
+		close(STDERR_FILENO);
+
 		/* set up args */
 		argc = 3;
 		args = malloc(sizeof(*args) * argc);
@@ -138,7 +151,7 @@ static int mod_rrd_create_pipe(server *srv, plugin_data *p) {
 
 		args[i++] = p->conf.path_rrdtool_bin->ptr;
 		args[i++] = dash;
-		args[i  ] = NULL;
+		args[i++] = NULL;
 
 		/* we don't need the client socket */
 		for (i = 3; i < 256; i++) {
@@ -148,15 +161,14 @@ static int mod_rrd_create_pipe(server *srv, plugin_data *p) {
 		/* exec the cgi */
 		execv(args[0], args);
 
-		/* log_error_write(srv, __FILE__, __LINE__, "sss", "spawing rrdtool failed: ", strerror(errno), args[0]); */
-
 		/* */
-		SEGFAULT();
+		SEGFAULT("spawing '%s' failed: %s", args[0], strerror(errno));
+
 		break;
 	}
 	case -1:
 		/* error */
-		log_error_write(srv, __FILE__, __LINE__, "ss", "fork failed: ", strerror(errno));
+		ERROR("fork failed: %s", strerror(errno));
 		break;
 	default: {
 		/* father */
@@ -227,7 +239,7 @@ static ssize_t safe_read(int fd, void *buf, size_t count) {
 
 static int mod_rrdtool_create_rrd(server *srv, plugin_data *p, plugin_config *s) {
 	struct stat st;
-	int r;
+	int r ;
 
 	/* check if DB already exists */
 	if (0 == stat(s->path_rrd->ptr, &st)) {
@@ -237,11 +249,11 @@ static int mod_rrdtool_create_rrd(server *srv, plugin_data *p, plugin_config *s)
 					"not a regular file:", s->path_rrd);
 			return HANDLER_ERROR;
 		}
+	}
 
-		/* still create DB if it's empty file */
-		if (st.st_size > 0) {
-			return HANDLER_GO_ON;
-		}
+	/* still create DB if it's empty file */
+	if (st.st_size > 0) {
+		return HANDLER_GO_ON;
 	}
 
 	/* create a new one */
@@ -265,7 +277,7 @@ static int mod_rrdtool_create_rrd(server *srv, plugin_data *p, plugin_config *s)
 		"RRA:MIN:0.5:24:775 "
 		"RRA:MIN:0.5:288:797\n"));
 
-	if (-1 == (safe_write(p->write_fd, p->cmd->ptr, p->cmd->used - 1))) {
+	if (-1 == (r = safe_write(p->write_fd, p->cmd->ptr, p->cmd->used - 1))) {
 		log_error_write(srv, __FILE__, __LINE__, "ss",
 			"rrdtool-write: failed", strerror(errno));
 
@@ -293,14 +305,12 @@ static int mod_rrdtool_create_rrd(server *srv, plugin_data *p, plugin_config *s)
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_rrd_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(path_rrdtool_bin);
-	PATCH(path_rrd);
+	PATCH_OPTION(path_rrdtool_bin);
+	PATCH_OPTION(path_rrd);
 
 	p->conf.bytes_written_ptr = &(s->bytes_written);
 	p->conf.bytes_read_ptr = &(s->bytes_read);
@@ -319,7 +329,7 @@ static int mod_rrd_patch_connection(server *srv, connection *con, plugin_data *p
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("rrdtool.db-name"))) {
-				PATCH(path_rrd);
+				PATCH_OPTION(path_rrd);
 				/* get pointers to double values */
 
 				p->conf.bytes_written_ptr = &(s->bytes_written);
@@ -331,7 +341,6 @@ static int mod_rrd_patch_connection(server *srv, connection *con, plugin_data *p
 
 	return 0;
 }
-#undef PATCH
 
 SETDEFAULTS_FUNC(mod_rrd_set_defaults) {
 	plugin_data *p = p_d;
@@ -478,8 +487,8 @@ REQUESTDONE_FUNC(mod_rrd_account) {
 	return HANDLER_GO_ON;
 }
 
-int mod_rrdtool_plugin_init(plugin *p);
-int mod_rrdtool_plugin_init(plugin *p) {
+LI_EXPORT int mod_rrdtool_plugin_init(plugin *p);
+LI_EXPORT int mod_rrdtool_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("rrd");
 
@@ -488,7 +497,7 @@ int mod_rrdtool_plugin_init(plugin *p) {
 	p->set_defaults= mod_rrd_set_defaults;
 
 	p->handle_trigger      = mod_rrd_trigger;
-	p->handle_request_done = mod_rrd_account;
+	p->handle_response_done = mod_rrd_account;
 
 	p->data        = NULL;
 

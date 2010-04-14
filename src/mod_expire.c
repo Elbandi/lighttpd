@@ -1,3 +1,8 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -5,11 +10,6 @@
 
 #include "plugin.h"
 #include "stat_cache.h"
-
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
 
 /**
  * this is a expire module for a lighttpd
@@ -38,6 +38,8 @@ typedef struct {
 /* init the plugin data */
 INIT_FUNC(mod_expire_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -253,13 +255,11 @@ SETDEFAULTS_FUNC(mod_expire_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_expire_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(expire_url);
+	PATCH_OPTION(expire_url);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -274,14 +274,13 @@ static int mod_expire_patch_connection(server *srv, connection *con, plugin_data
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("expire.url"))) {
-				PATCH(expire_url);
+				PATCH_OPTION(expire_url);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 URIHANDLER_FUNC(mod_expire_path_handler) {
 	plugin_data *p = p_d;
@@ -304,20 +303,26 @@ URIHANDLER_FUNC(mod_expire_path_handler) {
 		if (0 == strncmp(con->uri.path->ptr, ds->key->ptr, ct_len)) {
 			time_t ts, expires;
 			size_t len;
-			stat_cache_entry *sce = NULL;
-
-			stat_cache_get_entry(srv, con, con->physical.path, &sce);
 
 			switch(mod_expire_get_offset(srv, p, ds->value, &ts)) {
 			case 0:
 				/* access */
 				expires = (ts + srv->cur_ts);
 				break;
-			case 1:
+			case 1: {
 				/* modification */
+				stat_cache_entry *sce = NULL;
+
+				if (buffer_is_empty(con->physical.path)) return HANDLER_GO_ON;
+
+				if (HANDLER_GO_ON != stat_cache_get_entry(srv, con, con->physical.path, &sce)) {
+					/* it failed for some reason, just skip it */
+					return HANDLER_GO_ON;
+				}
 
 				expires = (ts + sce->st.st_mtime);
-				break;
+
+				break; }
 			default:
 				/* -1 is handled at parse-time */
 				break;
@@ -342,7 +347,7 @@ URIHANDLER_FUNC(mod_expire_path_handler) {
 			buffer_copy_string_len(p->expire_tstmp, CONST_STR_LEN("max-age="));
 			buffer_append_long(p->expire_tstmp, expires - srv->cur_ts); /* as expires >= srv->cur_ts the difference is >= 0 */
 
-			response_header_append(srv, con, CONST_STR_LEN("Cache-Control"), CONST_BUF_LEN(p->expire_tstmp));
+			response_header_overwrite(srv, con, CONST_STR_LEN("Cache-Control"), CONST_BUF_LEN(p->expire_tstmp));
 
 			return HANDLER_GO_ON;
 		}
@@ -354,13 +359,13 @@ URIHANDLER_FUNC(mod_expire_path_handler) {
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_expire_plugin_init(plugin *p);
-int mod_expire_plugin_init(plugin *p) {
+LI_EXPORT int mod_expire_plugin_init(plugin *p);
+LI_EXPORT int mod_expire_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("expire");
 
 	p->init        = mod_expire_init;
-	p->handle_subrequest_start = mod_expire_path_handler;
+	p->handle_response_header = mod_expire_path_handler;
 	p->set_defaults  = mod_expire_set_defaults;
 	p->cleanup     = mod_expire_free;
 

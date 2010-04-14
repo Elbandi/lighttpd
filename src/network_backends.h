@@ -2,63 +2,57 @@
 #define _NETWORK_BACKENDS_H_
 
 #ifdef HAVE_CONFIG_H
-# include "config.h"
+#include "config.h"
 #endif
-#include "settings.h"
 
 #include <sys/types.h>
 
-/* on linux 2.4.x you get either sendfile or LFS */
-#if defined HAVE_SYS_SENDFILE_H && defined HAVE_SENDFILE && (!defined _LARGEFILE_SOURCE || defined HAVE_SENDFILE64) && defined HAVE_WRITEV && defined(__linux__) && !defined HAVE_SENDFILE_BROKEN
-# define USE_LINUX_SENDFILE
-# include <sys/sendfile.h>
-# include <sys/uio.h>
-#endif
-
-#if defined HAVE_SYS_UIO_H && defined HAVE_SENDFILE && defined HAVE_WRITEV && (defined(__FreeBSD__) || defined(__DragonFly__))
-# define USE_FREEBSD_SENDFILE
-# include <sys/uio.h>
-#endif
-
-#if defined HAVE_SYS_SENDFILE_H && defined HAVE_SENDFILEV && defined HAVE_WRITEV && defined(__sun)
-# define USE_SOLARIS_SENDFILEV
-# include <sys/sendfile.h>
-# include <sys/uio.h>
-#endif
-
-#if defined HAVE_SYS_UIO_H && defined HAVE_WRITEV
-# define USE_WRITEV
-# include <sys/uio.h>
-#endif
-
-#if defined HAVE_SYS_MMAN_H && defined HAVE_MMAP
-# define USE_MMAP
-# include <sys/mman.h>
-/* NetBSD 1.3.x needs it */
-# ifndef MAP_FAILED
-#  define MAP_FAILED -1
-# endif
-#endif
-
-#if defined HAVE_SYS_UIO_H && defined HAVE_WRITEV && defined HAVE_SEND_FILE && defined(__aix)
-# define USE_AIX_SENDFILE
-#endif
-
+#include "settings.h"
 #include "base.h"
+#include "network.h"
 
-/* return values:
- * >= 0 : chunks completed
- *   -1 : error (on our side)
- *   -2 : remote close
- */
+#define NETWORK_BACKEND_WRITE_CHUNK(x) \
+    network_status_t network_write_chunkqueue_##x(server *srv, connection *con, iosocket *sock, chunkqueue *cq, chunk *c)
 
-int network_write_chunkqueue_write(server *srv, connection *con, int fd, chunkqueue *cq);
-int network_write_chunkqueue_writev(server *srv, connection *con, int fd, chunkqueue *cq);
-int network_write_chunkqueue_linuxsendfile(server *srv, connection *con, int fd, chunkqueue *cq);
-int network_write_chunkqueue_freebsdsendfile(server *srv, connection *con, int fd, chunkqueue *cq);
-int network_write_chunkqueue_solarissendfilev(server *srv, connection *con, int fd, chunkqueue *cq);
+#define NETWORK_BACKEND_WRITE(x) \
+    network_status_t network_write_chunkqueue_##x(server *srv, connection *con, iosocket *sock, chunkqueue *cq)
+#define NETWORK_BACKEND_READ(x) \
+    network_status_t network_read_chunkqueue_##x(server *srv, connection *con, iosocket *sock, chunkqueue *cq)
+
+LI_API NETWORK_BACKEND_WRITE_CHUNK(writev_mem);
+
+LI_API NETWORK_BACKEND_WRITE(write);
+LI_API NETWORK_BACKEND_WRITE(writev);
+LI_API NETWORK_BACKEND_WRITE(linuxsendfile);
+LI_API NETWORK_BACKEND_WRITE(linuxaiosendfile);
+LI_API NETWORK_BACKEND_WRITE(posixaio);
+LI_API NETWORK_BACKEND_WRITE(gthreadaio);
+LI_API NETWORK_BACKEND_WRITE(gthreadsendfile);
+LI_API NETWORK_BACKEND_WRITE(freebsdsendfile);
+LI_API NETWORK_BACKEND_WRITE(solarissendfilev);
+
+LI_API NETWORK_BACKEND_WRITE(win32transmitfile);
+LI_API NETWORK_BACKEND_WRITE(win32send);
+
+LI_API NETWORK_BACKEND_READ(read);
+LI_API NETWORK_BACKEND_READ(win32recv);
+
 #ifdef USE_OPENSSL
-int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chunkqueue *cq);
+LI_API NETWORK_BACKEND_WRITE(openssl);
+LI_API NETWORK_BACKEND_READ(openssl);
 #endif
+
+typedef struct {
+	network_backend_t type;
+	const char *name;
+	const char *description;
+	network_status_t (*read_handler)(server *srv, connection *con, iosocket *sock, chunkqueue *cq);
+	network_status_t (*write_handler)(server *srv, connection *con, iosocket *sock, chunkqueue *cq);
+} network_backend_info_t;
+
+LI_API const network_backend_info_t *network_get_backends();
+LI_API const network_backend_info_t *network_get_defaultbackend();
+LI_API const network_backend_info_t *network_get_backend_info_by_type(network_backend_t type);
+LI_API const network_backend_info_t *network_get_backend_info_by_name(const char *name);
 
 #endif

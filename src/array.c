@@ -1,6 +1,3 @@
-#include "array.h"
-#include "buffer.h"
-
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +5,9 @@
 
 #include <errno.h>
 #include <assert.h>
+
+#include "array.h"
+#include "buffer.h"
 
 array *array_init(void) {
 	array *a;
@@ -116,10 +116,10 @@ static int array_get_index(array *a, const char *key, size_t keylen, int *rndx) 
 	return ndx;
 }
 
-data_unset *array_get_element(array *a, const char *key) {
+data_unset *array_get_element(array *a, const char *key, size_t keylen) {
 	int ndx;
 
-	if (-1 != (ndx = array_get_index(a, key, strlen(key) + 1, NULL))) {
+	if (-1 != (ndx = array_get_index(a, key, keylen + 1, NULL))) {
 		/* found, leave here */
 
 		return a->data[ndx];
@@ -149,10 +149,22 @@ data_unset *array_get_unused_element(array *a, data_type_t t) {
 void array_set_key_value(array *hdrs, const char *key, size_t key_len, const char *value, size_t val_len) {
 	data_string *ds_dst;
 
-	if (NULL != (ds_dst = (data_string *)array_get_element(hdrs, key))) {
+	if (NULL != (ds_dst = (data_string *)array_get_element(hdrs, key, key_len))) {
 		buffer_copy_string_len(ds_dst->value, value, val_len);
 		return;
 	}
+
+	if (NULL == (ds_dst = (data_string *)array_get_unused_element(hdrs, TYPE_STRING))) {
+		ds_dst = data_string_init();
+	}
+
+	buffer_copy_string_len(ds_dst->key, key, key_len);
+	buffer_copy_string_len(ds_dst->value, value, val_len);
+	array_insert_unique(hdrs, (data_unset *)ds_dst);
+}
+
+void array_append_key_value(array *hdrs, const char *key, size_t key_len, const char *value, size_t val_len) {
+	data_string *ds_dst;
 
 	if (NULL == (ds_dst = (data_string *)array_get_unused_element(hdrs, TYPE_STRING))) {
 		ds_dst = data_string_init();
@@ -182,7 +194,7 @@ int array_insert_unique(array *a, data_unset *str) {
 	int pos = 0;
 	size_t j;
 
-	/* generate unique index if neccesary */
+	/* generate unique index if necessary */
 	if (str->key->used == 0 || str->is_index_key) {
 		buffer_copy_long(str->key, a->unique_ndx++);
 		str->is_index_key = 1;
@@ -232,7 +244,7 @@ int array_insert_unique(array *a, data_unset *str) {
 		pos++;
 	}
 
-	/* move everything on step to the right */
+	/* move everything one step to the right */
 	if (pos != ndx) {
 		memmove(a->sorted + (pos + 1), a->sorted + (pos), (ndx - pos) * sizeof(*a->sorted));
 	}

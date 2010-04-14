@@ -1,12 +1,16 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
 
 #include "plugin.h"
 
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 /**
  * this is a skeleton for a lighttpd plugin
@@ -128,13 +132,11 @@ SETDEFAULTS_FUNC(mod_skeleton_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_skeleton_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(match);
+	PATCH_OPTION(match);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -149,14 +151,13 @@ static int mod_skeleton_patch_connection(server *srv, connection *con, plugin_da
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("skeleton.array"))) {
-				PATCH(match);
+				PATCH_OPTION(match);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 URIHANDLER_FUNC(mod_skeleton_uri_handler) {
 	plugin_data *p = p_d;
@@ -164,8 +165,6 @@ URIHANDLER_FUNC(mod_skeleton_uri_handler) {
 	size_t k, i;
 
 	UNUSED(srv);
-
-	if (con->mode != DIRECT) return HANDLER_GO_ON;
 
 	if (con->uri.path->used == 0) return HANDLER_GO_ON;
 

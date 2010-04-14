@@ -1,3 +1,22 @@
+/*
+ * make sure _GNU_SOURCE is defined
+ */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
+#include <sys/types.h>
+#include <sys/stat.h>
+
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h> /* only the defines on windows */
+#include <errno.h>
+#include <time.h>
+
+#include <stdio.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -7,19 +26,7 @@
 #include "inet_ntop_cache.h"
 
 #include "sys-socket.h"
-
-#include <sys/types.h>
-#include <sys/stat.h>
-
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <errno.h>
-#include <time.h>
-
-#include <stdio.h>
+#include "sys-files.h"
 
 #ifdef HAVE_SYSLOG_H
 # include <syslog.h>
@@ -135,8 +142,6 @@ typedef struct {
 
 	buffer *access_logbuffer;
 	buffer *ts_accesslog_str;
-	buffer *ts_accesslog_fmt_str;
-	unsigned short append_tz_offset;
 
 	format_fields *parsed_format;
 } plugin_config;
@@ -151,67 +156,22 @@ typedef struct {
 INIT_FUNC(mod_accesslog_init) {
 	plugin_data *p;
 
+	UNUSED(srv);
+
 	p = calloc(1, sizeof(*p));
 
 	return p;
 }
 
-static void accesslog_append_escaped(buffer *dest, buffer *str) {
-	/* replaces non-printable chars with \xHH where HH is the hex representation of the byte */
-	/* exceptions: " => \", \ => \\, whitespace chars => \n \t etc. */
-	if (str->used == 0) return;
-	buffer_prepare_append(dest, str->used - 1);
-
-	for (unsigned int i = 0; i < str->used - 1; i++) {
-		if (str->ptr[i] >= ' ' && str->ptr[i] <= '~') {
-			/* printable chars */
-			buffer_append_string_len(dest, &str->ptr[i], 1);
-		} else switch (str->ptr[i]) {
-		case '"':
-			BUFFER_APPEND_STRING_CONST(dest, "\\\"");
-			break;
-		case '\\':
-			BUFFER_APPEND_STRING_CONST(dest, "\\\\");
-			break;
-		case '\b':
-			BUFFER_APPEND_STRING_CONST(dest, "\\b");
-			break;
-		case '\n':
-			BUFFER_APPEND_STRING_CONST(dest, "\\n");
-			break;
-		case '\r':
-			BUFFER_APPEND_STRING_CONST(dest, "\\r");
-			break;
-		case '\t':
-			BUFFER_APPEND_STRING_CONST(dest, "\\t");
-			break;
-		case '\v':
-			BUFFER_APPEND_STRING_CONST(dest, "\\v");
-			break;
-		default: {
-				/* non printable char => \xHH */
-				char hh[5] = {'\\','x',0,0,0};
-				char h = str->ptr[i] / 16;
-				hh[2] = (h > 9) ? (h - 10 + 'A') : (h + '0');
-				h = str->ptr[i] % 16;
-				hh[3] = (h > 9) ? (h - 10 + 'A') : (h + '0');
-				buffer_append_string_len(dest, &hh[0], 4);
-			}
-			break;
-		}
-	}
-}
-
 static int accesslog_parse_format(server *srv, format_fields *fields, buffer *format) {
 	size_t i, j, k = 0, start = 0;
 
-	if (format->used == 0) return -1;
-
 	for (i = 0; i < format->used - 1; i++) {
+
 		switch(format->ptr[i]) {
 		case '%':
-			if (i > 0 && start != i) {
-				/* copy the string before this % */
+			if (start != i) {
+				/* copy the string */
 				if (fields->size == 0) {
 					fields->size = 16;
 					fields->used = 0;
@@ -230,6 +190,7 @@ static int accesslog_parse_format(server *srv, format_fields *fields, buffer *fo
 				fields->used++;
 			}
 
+
 			/* we need a new field */
 
 			if (fields->size == 0) {
@@ -245,12 +206,7 @@ static int accesslog_parse_format(server *srv, format_fields *fields, buffer *fo
 			switch (format->ptr[i+1]) {
 			case '>':
 			case '<':
-				/* after the } has to be a character */
-				if (format->ptr[i+2] == '\0') {
-					log_error_write(srv, __FILE__, __LINE__, "s", "%< and %> have to be followed by a format-specifier");
-					return -1;
-				}
-
+				/* only for s */
 
 				for (j = 0; fmap[j].key != '\0'; j++) {
 					if (fmap[j].key != format->ptr[i+2]) continue;
@@ -268,12 +224,11 @@ static int accesslog_parse_format(server *srv, format_fields *fields, buffer *fo
 				}
 
 				if (fmap[j].key == '\0') {
-					log_error_write(srv, __FILE__, __LINE__, "s", "%< and %> have to be followed by a valid format-specifier");
+					log_error_write(srv, __FILE__, __LINE__, "ss", "config: ", "failed");
 					return -1;
 				}
 
 				start = i + 3;
-				i = start - 1; /* skip the string */
 
 				break;
 			case '{':
@@ -284,18 +239,11 @@ static int accesslog_parse_format(server *srv, format_fields *fields, buffer *fo
 				}
 
 				if (k == format->used - 1) {
-					log_error_write(srv, __FILE__, __LINE__, "s", "%{ has to be terminated by a }");
+					log_error_write(srv, __FILE__, __LINE__, "ss", "config: ", "failed");
 					return -1;
 				}
-
-				/* after the } has to be a character */
 				if (format->ptr[k+1] == '\0') {
-					log_error_write(srv, __FILE__, __LINE__, "s", "%{...} has to be followed by a format-specifier");
-					return -1;
-				}
-
-				if (k == i + 2) {
-					log_error_write(srv, __FILE__, __LINE__, "s", "%{...} has to be contain a string");
+					log_error_write(srv, __FILE__, __LINE__, "ss", "config: ", "failed");
 					return -1;
 				}
 
@@ -317,21 +265,14 @@ static int accesslog_parse_format(server *srv, format_fields *fields, buffer *fo
 				}
 
 				if (fmap[j].key == '\0') {
-					log_error_write(srv, __FILE__, __LINE__, "s", "%{...} has to be followed by a valid format-specifier");
+					log_error_write(srv, __FILE__, __LINE__, "ss", "config: ", "failed");
 					return -1;
 				}
 
 				start = k + 2;
-				i = start - 1; /* skip the string */
 
 				break;
 			default:
-				/* after the % has to be a character */
-				if (format->ptr[i+1] == '\0') {
-					log_error_write(srv, __FILE__, __LINE__, "s", "% has to be followed by a format-specifier");
-					return -1;
-				}
-
 				for (j = 0; fmap[j].key != '\0'; j++) {
 					if (fmap[j].key != format->ptr[i+1]) continue;
 
@@ -348,12 +289,11 @@ static int accesslog_parse_format(server *srv, format_fields *fields, buffer *fo
 				}
 
 				if (fmap[j].key == '\0') {
-					log_error_write(srv, __FILE__, __LINE__, "s", "% has to be followed by a valid format-specifier");
+					log_error_write(srv, __FILE__, __LINE__, "ss", "config: ", "failed");
 					return -1;
 				}
 
 				start = i + 2;
-				i = start - 1; /* skip the string */
 
 				break;
 			}
@@ -413,7 +353,6 @@ FREE_FUNC(mod_accesslog_free) {
 			if (s->log_access_fd != -1) close(s->log_access_fd);
 
 			buffer_free(s->ts_accesslog_str);
-			buffer_free(s->ts_accesslog_fmt_str);
 			buffer_free(s->access_logbuffer);
 			buffer_free(s->format);
 			buffer_free(s->access_logfile);
@@ -462,7 +401,6 @@ SETDEFAULTS_FUNC(log_access_open) {
 		s->format = buffer_init();
 		s->access_logbuffer = buffer_init();
 		s->ts_accesslog_str = buffer_init();
-		s->ts_accesslog_fmt_str = buffer_init();
 		s->log_access_fd = -1;
 		s->last_generated_accesslog_ts = 0;
 		s->last_generated_accesslog_ts_ptr = &(s->last_generated_accesslog_ts);
@@ -487,8 +425,6 @@ SETDEFAULTS_FUNC(log_access_open) {
 		/* parse */
 
 		if (s->format->used) {
-			size_t j, count;
-
 			s->parsed_format = calloc(1, sizeof(*(s->parsed_format)));
 
 			if (-1 == accesslog_parse_format(srv, s->parsed_format, s->format)) {
@@ -498,29 +434,6 @@ SETDEFAULTS_FUNC(log_access_open) {
 
 				return HANDLER_ERROR;
 			}
-
-			/* make sure they didn't try to send the timestamp in twice...
-			 * also, save the format string in a different variable (this
-			 * will save a few conditionals later)
-			 */
-			count = 0;
-			for (j = 0; j < s->parsed_format->used; j++) {
-				if (FIELD_FORMAT == s->parsed_format->ptr[j]->type) {
-					if (FORMAT_TIMESTAMP == s->parsed_format->ptr[j]->field) {
-						if (!buffer_is_empty(s->parsed_format->ptr[j]->string)) {
-							buffer_copy_string(s->ts_accesslog_fmt_str, s->parsed_format->ptr[j]->string->ptr);
-						}
-
-						if (++count > 1) {
-							log_error_write(srv, __FILE__, __LINE__, "sb",
-								"you may not use the timestamp twice in the same access log:", s->format);
-
-							return HANDLER_ERROR;
-						}
-					}
-				}
-			}
-
 #if 0
 			/* debugging */
 			for (j = 0; j < s->parsed_format->used; j++) {
@@ -541,26 +454,79 @@ SETDEFAULTS_FUNC(log_access_open) {
 #endif
 		}
 
-		s->append_tz_offset = 0;
-		if (buffer_is_empty(s->ts_accesslog_fmt_str)) {
-#if defined(HAVE_STRUCT_TM_GMTOFF)
-			BUFFER_COPY_STRING_CONST(s->ts_accesslog_fmt_str, "[%d/%b/%Y:%H:%M:%S ");
-			s->append_tz_offset = 1;
-#else
-			BUFFER_COPY_STRING_CONST(s->ts_accesslog_fmt_str, "[%d/%b/%Y:%H:%M:%S +0000]");
-#endif
-		}
-
 		if (s->use_syslog) {
 			/* ignore the next checks */
 			continue;
 		}
 
-		if (s->access_logfile->used < 2) continue;
+		if (buffer_is_empty(s->access_logfile)) continue;
 
-		if (-1 == (s->log_access_fd = open_logfile_or_pipe(srv, s->access_logfile->ptr)))
+		if (s->access_logfile->ptr[0] == '|') {
+#ifdef HAVE_FORK
+			/* create write pipe and spawn process */
+
+			int to_log_fds[2];
+			pid_t pid;
+
+			if (pipe(to_log_fds)) {
+				log_error_write(srv, __FILE__, __LINE__, "ss", "pipe failed: ", strerror(errno));
+				return HANDLER_ERROR;
+			}
+
+			/* fork, execve */
+			switch (pid = fork()) {
+			case 0:
+				/* child */
+
+				close(STDIN_FILENO);
+				dup2(to_log_fds[0], STDIN_FILENO);
+				close(to_log_fds[0]);
+				/* not needed */
+				close(to_log_fds[1]);
+
+				/* we don't need the client socket */
+				for (i = 3; i < 256; i++) {
+					close(i);
+				}
+
+				/* exec the log-process (skip the | )
+				 *
+				 */
+
+				execl("/bin/sh", "sh", "-c", s->access_logfile->ptr + 1, (char *)NULL);
+
+				log_error_write(srv, __FILE__, __LINE__, "sss",
+						"spawning log-process failed: ", strerror(errno),
+						s->access_logfile->ptr + 1);
+
+				exit(-1);
+				break;
+			case -1:
+				/* error */
+				log_error_write(srv, __FILE__, __LINE__, "ss", "fork failed: ", strerror(errno));
+				break;
+			default:
+				close(to_log_fds[0]);
+
+				s->log_access_fd = to_log_fds[1];
+
+				break;
+			}
+#else
+			return -1;
+#endif
+		} else if (-1 == (s->log_access_fd =
+				  open(s->access_logfile->ptr, O_APPEND | O_WRONLY | O_CREAT | O_LARGEFILE, 0644))) {
+
+			log_error_write(srv, __FILE__, __LINE__, "ssb",
+					"opening access-log failed:",
+					strerror(errno), s->access_logfile);
+
 			return HANDLER_ERROR;
-
+		}
+#ifndef _WIN32
+		fcntl(s->log_access_fd, F_SETFD, FD_CLOEXEC);
+#endif
 	}
 
 	return HANDLER_GO_ON;
@@ -591,7 +557,7 @@ SIGHUP_FUNC(log_access_cycle) {
 		}
 
 		if (s->use_syslog == 0 &&
-		    s->access_logfile->used > 1 &&
+		    !buffer_is_empty(s->access_logfile) &&
 		    s->access_logfile->ptr[0] != '|') {
 
 			close(s->log_access_fd);
@@ -603,31 +569,24 @@ SIGHUP_FUNC(log_access_cycle) {
 
 				return HANDLER_ERROR;
 			}
-#ifdef FD_CLOEXEC
-			fcntl(s->log_access_fd, F_SETFD, FD_CLOEXEC);
-#endif
 		}
 	}
 
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_accesslog_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(access_logfile);
-	PATCH(format);
-	PATCH(log_access_fd);
-	PATCH(last_generated_accesslog_ts_ptr);
-	PATCH(access_logbuffer);
-	PATCH(ts_accesslog_str);
-	PATCH(ts_accesslog_fmt_str);
-	PATCH(append_tz_offset);
-	PATCH(parsed_format);
-	PATCH(use_syslog);
+	PATCH_OPTION(access_logfile);
+	PATCH_OPTION(format);
+	PATCH_OPTION(log_access_fd);
+	PATCH_OPTION(last_generated_accesslog_ts_ptr);
+	PATCH_OPTION(access_logbuffer);
+	PATCH_OPTION(ts_accesslog_str);
+	PATCH_OPTION(parsed_format);
+	PATCH_OPTION(use_syslog);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -642,26 +601,22 @@ static int mod_accesslog_patch_connection(server *srv, connection *con, plugin_d
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("accesslog.filename"))) {
-				PATCH(access_logfile);
-				PATCH(log_access_fd);
-				PATCH(access_logbuffer);
+				PATCH_OPTION(access_logfile);
+				PATCH_OPTION(log_access_fd);
+				PATCH_OPTION(last_generated_accesslog_ts_ptr);
+				PATCH_OPTION(access_logbuffer);
+				PATCH_OPTION(ts_accesslog_str);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("accesslog.format"))) {
-				PATCH(format);
-				PATCH(parsed_format);
-				PATCH(last_generated_accesslog_ts_ptr);
-				PATCH(ts_accesslog_str);
-				PATCH(ts_accesslog_fmt_str);
-				PATCH(append_tz_offset);
+				PATCH_OPTION(format);
+				PATCH_OPTION(parsed_format);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("accesslog.use-syslog"))) {
-				PATCH(use_syslog);
-				PATCH(access_logbuffer);
+				PATCH_OPTION(use_syslog);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 REQUESTDONE_FUNC(log_access_write) {
 	plugin_data *p = p_d;
@@ -672,9 +627,6 @@ REQUESTDONE_FUNC(log_access_write) {
 	data_string *ds;
 
 	mod_accesslog_patch_connection(srv, con, p);
-
-	/* No output device, nothing to do */
-	if (!p->conf.use_syslog && p->conf.log_access_fd == -1) return HANDLER_GO_ON;
 
 	b = p->conf.access_logbuffer;
 	if (b->used == 0) {
@@ -701,36 +653,34 @@ REQUESTDONE_FUNC(log_access_write) {
 #if defined(HAVE_STRUCT_TM_GMTOFF)
 # ifdef HAVE_LOCALTIME_R
 					localtime_r(&(srv->cur_ts), &tm);
-					strftime(p->conf.ts_accesslog_str->ptr, p->conf.ts_accesslog_str->size - 1, p->conf.ts_accesslog_fmt_str->ptr, &tm);
-# else /* HAVE_LOCALTIME_R */
-					strftime(p->conf.ts_accesslog_str->ptr, p->conf.ts_accesslog_str->size - 1, p->conf.ts_accesslog_fmt_str->ptr, localtime_r(&(srv->cur_ts)));
-# endif /* HAVE_LOCALTIME_R */
+					strftime(p->conf.ts_accesslog_str->ptr, p->conf.ts_accesslog_str->size - 1, "[%d/%b/%Y:%H:%M:%S ", &tm);
+# else
+					strftime(p->conf.ts_accesslog_str->ptr, p->conf.ts_accesslog_str->size - 1, "[%d/%b/%Y:%H:%M:%S ", localtime(&(srv->cur_ts)));
+# endif
 					p->conf.ts_accesslog_str->used = strlen(p->conf.ts_accesslog_str->ptr) + 1;
 
-					if (p->conf.append_tz_offset) {
-						buffer_append_string_len(p->conf.ts_accesslog_str, tm.tm_gmtoff >= 0 ? "+" : "-", 1);
+					buffer_append_string(p->conf.ts_accesslog_str, tm.tm_gmtoff >= 0 ? "+" : "-");
 
-						scd = abs(tm.tm_gmtoff);
-						hrs = scd / 3600;
-						min = (scd % 3600) / 60;
+					scd = abs(tm.tm_gmtoff);
+					hrs = scd / 3600;
+					min = (scd % 3600) / 60;
 
-						/* hours */
-						if (hrs < 10) buffer_append_string_len(p->conf.ts_accesslog_str, CONST_STR_LEN("0"));
-						buffer_append_long(p->conf.ts_accesslog_str, hrs);
+					/* hours */
+					if (hrs < 10) buffer_append_string_len(p->conf.ts_accesslog_str, CONST_STR_LEN("0"));
+					buffer_append_long(p->conf.ts_accesslog_str, hrs);
 
-						if (min < 10) buffer_append_string_len(p->conf.ts_accesslog_str, CONST_STR_LEN("0"));
-						buffer_append_long(p->conf.ts_accesslog_str, min);
-						buffer_append_string_len(p->conf.ts_accesslog_str, CONST_STR_LEN("]"));
-					}
-#else /* HAVE_STRUCT_TM_GMTOFF */
-# ifdef HAVE_GMTIME_R
+					if (min < 10) buffer_append_string_len(p->conf.ts_accesslog_str, CONST_STR_LEN("0"));
+					buffer_append_long(p->conf.ts_accesslog_str, min);
+					buffer_append_string_len(p->conf.ts_accesslog_str, CONST_STR_LEN("]"));
+#else
+#ifdef HAVE_GMTIME_R
 					gmtime_r(&(srv->cur_ts), &tm);
-					strftime(p->conf.ts_accesslog_str->ptr, p->conf.ts_accesslog_str->size - 1, p->conf.ts_accesslog_fmt_str->ptr, &tm);
-# else /* HAVE_GMTIME_R */
-					strftime(p->conf.ts_accesslog_str->ptr, p->conf.ts_accesslog_str->size - 1, p->conf.ts_accesslog_fmt_str->ptr, gmtime(&(srv->cur_ts)));
-# endif /* HAVE_GMTIME_R */
+					strftime(p->conf.ts_accesslog_str->ptr, p->conf.ts_accesslog_str->size - 1, "[%d/%b/%Y:%H:%M:%S +0000]", &tm);
+#else
+					strftime(p->conf.ts_accesslog_str->ptr, p->conf.ts_accesslog_str->size - 1, "[%d/%b/%Y:%H:%M:%S +0000]", gmtime(&(srv->cur_ts)));
+#endif
 					p->conf.ts_accesslog_str->used = strlen(p->conf.ts_accesslog_str->ptr) + 1;
-#endif /* HAVE_STRUCT_TM_GMTOFF */
+#endif
 
 					*(p->conf.last_generated_accesslog_ts_ptr) = srv->cur_ts;
 					newts = 1;
@@ -758,9 +708,12 @@ REQUESTDONE_FUNC(log_access_write) {
 				}
 				break;
 			case FORMAT_REQUEST_LINE:
-				if (con->request.request_line->used) {
-					accesslog_append_escaped(b, con->request.request_line);
-				}
+				buffer_append_string(b, get_http_method_name(con->request.http_method));
+				buffer_append_string_len(b, CONST_STR_LEN(" "));
+				buffer_append_string_buffer(b, con->request.orig_uri);
+				buffer_append_string_len(b, CONST_STR_LEN(" "));
+				buffer_append_string(b, get_http_version_name(con->request.http_version));
+
 				break;
 			case FORMAT_STATUS:
 				buffer_append_long(b, con->http_status);
@@ -775,22 +728,15 @@ REQUESTDONE_FUNC(log_access_write) {
 				}
 				break;
 			case FORMAT_HEADER:
-				if (NULL != (ds = (data_string *)array_get_element(con->request.headers, p->conf.parsed_format->ptr[j]->string->ptr))) {
-					accesslog_append_escaped(b, ds->value);
+				if (NULL != (ds = (data_string *)array_get_element(con->request.headers, CONST_BUF_LEN(p->conf.parsed_format->ptr[j]->string)))) {
+					buffer_append_string_buffer(b, ds->value);
 				} else {
 					buffer_append_string_len(b, CONST_STR_LEN("-"));
 				}
 				break;
 			case FORMAT_RESPONSE_HEADER:
-				if (NULL != (ds = (data_string *)array_get_element(con->response.headers, p->conf.parsed_format->ptr[j]->string->ptr))) {
-					accesslog_append_escaped(b, ds->value);
-				} else {
-					buffer_append_string_len(b, CONST_STR_LEN("-"));
-				}
-				break;
-			case FORMAT_ENV:
-				if (NULL != (ds = (data_string *)array_get_element(con->environment, p->conf.parsed_format->ptr[j]->string->ptr))) {
-					accesslog_append_escaped(b, ds->value);
+				if (NULL != (ds = (data_string *)array_get_element(con->response.headers, CONST_BUF_LEN(p->conf.parsed_format->ptr[j]->string)))) {
+					buffer_append_string_buffer(b, ds->value);
 				} else {
 					buffer_append_string_len(b, CONST_STR_LEN("-"));
 				}
@@ -828,36 +774,26 @@ REQUESTDONE_FUNC(log_access_write) {
 				break;
 			case FORMAT_HTTP_HOST:
 				if (con->uri.authority->used > 1) {
-					accesslog_append_escaped(b, con->uri.authority);
+					buffer_append_string_buffer(b, con->uri.authority);
 				} else {
 					buffer_append_string_len(b, CONST_STR_LEN("-"));
 				}
 				break;
 			case FORMAT_REQUEST_PROTOCOL:
-				buffer_append_string_len(b,
-						     con->request.http_version == HTTP_VERSION_1_1 ? "HTTP/1.1" : "HTTP/1.0", 8);
+				buffer_append_string(b,
+						     con->request.http_version == HTTP_VERSION_1_1 ? "HTTP/1.1" : "HTTP/1.0");
 				break;
 			case FORMAT_REQUEST_METHOD:
 				buffer_append_string(b, get_http_method_name(con->request.http_method));
 				break;
-			case FORMAT_PERCENT:
-				buffer_append_string_len(b, CONST_STR_LEN("%"));
-				break;
 			case FORMAT_SERVER_PORT:
-				{
-					char *colon = strchr(((server_socket*)(con->srv_socket))->srv_token->ptr, ':');
-					if (colon) {
-						buffer_append_string(b, colon+1);
-					} else {
-						buffer_append_long(b, srv->srvconf.port);
-					}
-				}
+				buffer_append_long(b, srv->srvconf.port);
 				break;
 			case FORMAT_QUERY_STRING:
-				accesslog_append_escaped(b, con->uri.query);
+				buffer_append_string_buffer(b, con->uri.query);
 				break;
 			case FORMAT_URL:
-				accesslog_append_escaped(b, con->uri.path_raw);
+				buffer_append_string_buffer(b, con->uri.path_raw);
 				break;
 			case FORMAT_CONNECTION_STATUS:
 				switch(con->keep_alive) {
@@ -871,6 +807,7 @@ REQUESTDONE_FUNC(log_access_write) {
 				 { 'A', FORMAT_LOCAL_ADDR },
 				 { 'C', FORMAT_COOKIE },
 				 { 'D', FORMAT_TIME_USED_MS },
+				 { 'e', FORMAT_ENV },
 				 */
 
 				break;
@@ -884,7 +821,7 @@ REQUESTDONE_FUNC(log_access_write) {
 	buffer_append_string_len(b, CONST_STR_LEN("\n"));
 
 	if (p->conf.use_syslog ||  /* syslog doesn't cache */
-	    (p->conf.access_logfile->used && p->conf.access_logfile->ptr[0] == '|') || /* pipes don't cache */
+	    (p->conf.access_logfile->used && p->conf.access_logfile->ptr[0] != '|') || /* pipes don't cache */
 	    newts ||
 	    b->used > BUFFER_MAX_REUSE_SIZE) {
 		if (p->conf.use_syslog) {
@@ -904,8 +841,8 @@ REQUESTDONE_FUNC(log_access_write) {
 }
 
 
-int mod_accesslog_plugin_init(plugin *p);
-int mod_accesslog_plugin_init(plugin *p) {
+LI_EXPORT int mod_accesslog_plugin_init(plugin *p);
+LI_EXPORT int mod_accesslog_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("accesslog");
 
@@ -913,8 +850,8 @@ int mod_accesslog_plugin_init(plugin *p) {
 	p->set_defaults= log_access_open;
 	p->cleanup     = mod_accesslog_free;
 
-	p->handle_request_done  = log_access_write;
-	p->handle_sighup        = log_access_cycle;
+	p->handle_response_done  = log_access_write;
+	p->handle_sighup         = log_access_cycle;
 
 	p->data        = NULL;
 

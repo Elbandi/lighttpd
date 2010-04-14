@@ -8,7 +8,7 @@ BEGIN {
 
 use strict;
 use IO::Socket;
-use Test::More tests => 36;
+use Test::More tests => 33;
 use LightyTest;
 
 my $tf = LightyTest->new();
@@ -223,7 +223,7 @@ ok($tf->handle_http($t) == 0, 'Content-Length > max-request-size');
 $t->{REQUEST}  = ( <<EOF
 POST /12345.txt HTTP/1.0
 Host: 123.example.org
-Content-Length:
+Content-Length: 
 EOF
  );
 $t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 411 } ];
@@ -272,38 +272,6 @@ EOF
  );
 $t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200 } ];
 ok($tf->handle_http($t) == 0, 'uppercase filenames');
-
-$t->{REQUEST}  = ( <<EOF
-GET / HTTP/1.0
-Location: foo
-Location: foobar
-  baz
-EOF
- );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200 } ];
-ok($tf->handle_http($t) == 0, '#1232 - duplicate headers with line-wrapping');
-
-$t->{REQUEST}  = ( <<EOF
-GET / HTTP/1.0
-Location: 
-Location: foobar
-  baz
-EOF
- );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200 } ];
-ok($tf->handle_http($t) == 0, '#1232 - duplicate headers with line-wrapping - test 2');
-
-$t->{REQUEST}  = ( <<EOF
-GET / HTTP/1.0
-A: 
-Location: foobar
-  baz
-EOF
- );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200 } ];
-ok($tf->handle_http($t) == 0, '#1232 - duplicate headers with line-wrapping - test 3');
-
-
 
 
 ok($tf->stop_proc == 0, "Stopping lighttpd");

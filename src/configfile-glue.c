@@ -1,13 +1,12 @@
+#include <string.h>
+#include <ctype.h>
+
 #include "base.h"
 #include "buffer.h"
 #include "array.h"
 #include "log.h"
 #include "plugin.h"
-
 #include "configfile.h"
-
-#include <string.h>
-#include <stdlib.h>
 
 /**
  * like all glue code this file contains functions which
@@ -30,7 +29,7 @@ int config_insert_values_internal(server *srv, array *ca, const config_values_t 
 
 	for (i = 0; cv[i].key; i++) {
 
-		if (NULL == (du = array_get_element(ca, cv[i].key))) {
+		if (NULL == (du = array_get_element(ca, cv[i].key, strlen(cv[i].key)))) {
 			/* no found */
 
 			continue;
@@ -44,7 +43,11 @@ int config_insert_values_internal(server *srv, array *ca, const config_values_t 
 
 				for (j = 0; j < da->value->used; j++) {
 					if (da->value->data[j]->type == TYPE_STRING) {
-						data_string *ds = data_string_init();
+						data_string *ds;
+
+						if (NULL == (ds = (data_string *)array_get_unused_element(cv[i].destination, TYPE_STRING))) {
+							ds = data_string_init();
+						}
 
 						buffer_copy_string_buffer(ds->value, ((data_string *)(da->value->data[j]))->value);
 						if (!da->is_index_key) {
@@ -64,7 +67,7 @@ int config_insert_values_internal(server *srv, array *ca, const config_values_t 
 					}
 				}
 			} else {
-				log_error_write(srv, __FILE__, __LINE__, "ss", cv[i].key, "should have been a array of strings like ... = ( \"...\" )");
+				log_error_write(srv, __FILE__, __LINE__, "sss", "unexpected type for key: ", cv[i].key, "array of strings");
 
 				return -1;
 			}
@@ -74,8 +77,12 @@ int config_insert_values_internal(server *srv, array *ca, const config_values_t 
 				data_string *ds = (data_string *)du;
 
 				buffer_copy_string_buffer(cv[i].destination, ds->value);
+			} else if (du->type == TYPE_INTEGER) {
+				data_integer *di = (data_integer *)du;
+
+				buffer_copy_long(cv[i].destination, di->value);
 			} else {
-				log_error_write(srv, __FILE__, __LINE__, "ssss", cv[i].key, "should have been a string like ... = \"...\"");
+				log_error_write(srv, __FILE__, __LINE__, "ssss", "unexpected type for key: ", cv[i].key, "(string)", "\"...\"");
 
 				return -1;
 			}
@@ -91,19 +98,9 @@ int config_insert_values_internal(server *srv, array *ca, const config_values_t 
 			case TYPE_STRING: {
 				data_string *ds = (data_string *)du;
 
-				/* If the value came from an environment variable, then it is a
-				 * data_string, although it may contain a number in ASCII
-				 * decimal format.  We try to interpret the string as a decimal
-				 * short before giving up, in order to support setting numeric
-				 * values with environment variables (eg, port number).
-				 */
-				if (ds->value->ptr && *ds->value->ptr) {
-					char *e;
-					long l = strtol(ds->value->ptr, &e, 10);
-					if (e != ds->value->ptr && !*e && l >=0 && l <= 65535) {
-						*((unsigned short *)(cv[i].destination)) = l;
-						break;
-					}
+				if (buffer_isdigit(ds->value)) {
+					*((unsigned short *)(cv[i].destination)) = strtol(ds->value->ptr, NULL, 10);
+					break;
 				}
 
 				log_error_write(srv, __FILE__, __LINE__, "ssb", "got a string but expected a short:", cv[i].key, ds->value);
@@ -126,22 +123,17 @@ int config_insert_values_internal(server *srv, array *ca, const config_values_t 
 			case TYPE_STRING: {
 				data_string *ds = (data_string *)du;
 
-				if (ds->value->ptr && *ds->value->ptr) {
-					char *e;
-					long l = strtol(ds->value->ptr, &e, 10);
-					if (e != ds->value->ptr && !*e && l >= 0) {
-						*((unsigned int *)(cv[i].destination)) = l;
-						break;
-					}
+				if (buffer_isdigit(ds->value)) {
+					*((unsigned int *)(cv[i].destination)) = strtol(ds->value->ptr, NULL, 10);
+					break;
 				}
 
-
-				log_error_write(srv, __FILE__, __LINE__, "ssb", "got a string but expected an integer:", cv[i].key, ds->value);
+				log_error_write(srv, __FILE__, __LINE__, "ssb", "got a string but expected a integer:", cv[i].key, ds->value);
 
 				return -1;
 			}
 			default:
-				log_error_write(srv, __FILE__, __LINE__, "ssds", "unexpected type for key:", cv[i].key, du->type, "expected an integer, range 0 ... 4294967295");
+				log_error_write(srv, __FILE__, __LINE__, "ssds", "unexpected type for key:", cv[i].key, du->type, "expected a integer, range 0 ... 4294967295");
 				return -1;
 			}
 			break;
@@ -168,20 +160,19 @@ int config_insert_values_internal(server *srv, array *ca, const config_values_t 
 		case T_CONFIG_UNSET:
 			break;
 		case T_CONFIG_UNSUPPORTED:
-			log_error_write(srv, __FILE__, __LINE__, "ssss", "ERROR: found unsupported key:", cv[i].key, "-", (char *)(cv[i].destination));
+			ERROR("found unsupported key in '%s' = '%s'", cv[i].key, (char *)(cv[i].destination));
 
 			srv->config_unsupported = 1;
 
 			break;
 		case T_CONFIG_DEPRECATED:
-			log_error_write(srv, __FILE__, __LINE__, "ssss", "ERROR: found deprecated key:", cv[i].key, "-", (char *)(cv[i].destination));
+			ERROR("found deprecated key in '%s' = '%s'", cv[i].key, (char *)(cv[i].destination));
 
 			srv->config_deprecated = 1;
 
 			break;
 		}
 	}
-
 	return 0;
 }
 
@@ -192,7 +183,7 @@ int config_insert_values_global(server *srv, array *ca, const config_values_t cv
 	for (i = 0; cv[i].key; i++) {
 		data_string *touched;
 
-		if (NULL == (du = array_get_element(ca, cv[i].key))) {
+		if (NULL == (du = array_get_element(ca, cv[i].key, strlen(cv[i].key)))) {
 			/* no found */
 
 			continue;
@@ -210,12 +201,17 @@ int config_insert_values_global(server *srv, array *ca, const config_values_t cv
 	return config_insert_values_internal(srv, ca, cv);
 }
 
-static unsigned short sock_addr_get_port(sock_addr *addr) {
+unsigned short sock_addr_get_port(sock_addr *addr) {
+	switch (addr->plain.sa_family) {
+	case AF_INET:
+		return ntohs(addr->ipv4.sin_port);
 #ifdef HAVE_IPV6
-	return ntohs(addr->plain.sa_family ? addr->ipv6.sin6_port : addr->ipv4.sin_port);
-#else
-	return ntohs(addr->ipv4.sin_port);
+	case AF_INET6:
+		return ntohs(addr->ipv6.sin6_port);
 #endif
+	default:
+		return 0;
+	}
 }
 
 static cond_result_t config_check_cond_cached(server *srv, connection *con, data_config *dc);
@@ -223,16 +219,10 @@ static cond_result_t config_check_cond_cached(server *srv, connection *con, data
 static cond_result_t config_check_cond_nocache(server *srv, connection *con, data_config *dc) {
 	buffer *l;
 	server_socket *srv_sock = con->srv_socket;
-
 	/* check parent first */
 	if (dc->parent && dc->parent->context_ndx) {
-		/**
-		 * a nested conditional 
-		 *
-		 * if the parent is not decided yet or false, we can't be true either 
-		 */
 		if (con->conf.log_condition_handling) {
-			log_error_write(srv, __FILE__, __LINE__,  "sb", "go parent", dc->parent->key);
+			TRACE("checking if the parent (%s) evaluates to 'true'", SAFE_BUF_STR(dc->parent->key));
 		}
 
 		switch (config_check_cond_cached(srv, con, dc->parent)) {
@@ -246,22 +236,19 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 	}
 
 	if (dc->prev) {
-		/**
-		 * a else branch
-		 *
-		 * we can only be executed, if all of our previous brothers 
-		 * are false
-		 */
 		if (con->conf.log_condition_handling) {
-			log_error_write(srv, __FILE__, __LINE__,  "sb", "go prev", dc->prev->key);
+			TRACE("triggering eval of successors of (%s) [in else]", SAFE_BUF_STR(dc->key));
 		}
 
 		/* make sure prev is checked first */
 		config_check_cond_cached(srv, con, dc->prev);
 
-		/* one of prev set me to FALSE */
+		if (con->conf.log_condition_handling) {
+			TRACE("(%s) [in else] -> %s", SAFE_BUF_STR(dc->key), con->cond_cache[dc->context_ndx].result == COND_RESULT_FALSE ? "false" : "we will see");
+		}
+
 		switch (con->cond_cache[dc->context_ndx].result) {
-		case COND_RESULT_FALSE:
+		case COND_RESULT_FALSE: /* one of prev set me to FALSE */
 			return con->cond_cache[dc->context_ndx].result;
 		default:
 			break;
@@ -270,10 +257,10 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 
 	if (!con->conditional_is_valid[dc->comp]) {
 		if (con->conf.log_condition_handling) {
-			log_error_write(srv, __FILE__, __LINE__,  "dss", 
-				dc->comp,
-				dc->key->ptr,
-				con->conditional_is_valid[dc->comp] ? "yeah" : "nej");
+			TRACE("is condition [%d] (%s) already valid ? %s", 
+					dc->comp, 
+					SAFE_BUF_STR(dc->key),
+					con->conditional_is_valid[dc->comp] ? "yeah" : "nej");
 		}
 
 		return COND_RESULT_UNSET;
@@ -318,10 +305,6 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 			default:
 				break;
 			}
-#if defined USE_OPENSSL && ! defined OPENSSL_NO_TLSEXT
-		} else if (!buffer_is_empty(con->tlsext_server_name)) {
-			l = con->tlsext_server_name;
-#endif
 		} else {
 			l = srv->empty_string;
 		}
@@ -347,6 +330,13 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 			char *err;
 			struct in_addr val_inp;
 
+			if (con->conf.log_condition_handling) {
+				l = srv->empty_string;
+
+				log_error_write(srv, __FILE__, __LINE__,  "bsbsb", dc->comp_key,
+						"(", l, ") compare to", dc->string);
+			}
+
 			if (*(nm_slash+1) == '\0') {
 				log_error_write(srv, __FILE__, __LINE__, "sb", "ERROR: no number after / ", dc->string);
 
@@ -356,14 +346,14 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 			nm_bits = strtol(nm_slash + 1, &err, 10);
 
 			if (*err) {
-				log_error_write(srv, __FILE__, __LINE__, "sbs", "ERROR: non-digit found in netmask:", dc->string, err);
+				log_error_write(srv, __FILE__, __LINE__, "sbs", "ERROR: non-digit found in netmask:", dc->string, *err);
 
 				return COND_RESULT_FALSE;
 			}
 
 			/* take IP convert to the native */
 			buffer_copy_string_len(srv->cond_check_buf, dc->string->ptr, nm_slash - dc->string->ptr);
-#ifdef __WIN32
+#ifdef _WIN32
 			if (INADDR_NONE == (val_inp.s_addr = inet_addr(srv->cond_check_buf->ptr))) {
 				log_error_write(srv, __FILE__, __LINE__, "sb", "ERROR: ip addr is invalid:", srv->cond_check_buf);
 
@@ -410,7 +400,7 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 	case COMP_HTTP_REFERER: {
 		data_string *ds;
 
-		if (NULL != (ds = (data_string *)array_get_element(con->request.headers, "Referer"))) {
+		if (NULL != (ds = (data_string *)array_get_element(con->request.headers, CONST_STR_LEN("Referer")))) {
 			l = ds->value;
 		} else {
 			l = srv->empty_string;
@@ -419,7 +409,7 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 	}
 	case COMP_HTTP_COOKIE: {
 		data_string *ds;
-		if (NULL != (ds = (data_string *)array_get_element(con->request.headers, "Cookie"))) {
+		if (NULL != (ds = (data_string *)array_get_element(con->request.headers, CONST_STR_LEN("Cookie")))) {
 			l = ds->value;
 		} else {
 			l = srv->empty_string;
@@ -428,7 +418,7 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 	}
 	case COMP_HTTP_USER_AGENT: {
 		data_string *ds;
-		if (NULL != (ds = (data_string *)array_get_element(con->request.headers, "User-Agent"))) {
+		if (NULL != (ds = (data_string *)array_get_element(con->request.headers, CONST_STR_LEN("User-Agent")))) {
 			l = ds->value;
 		} else {
 			l = srv->empty_string;
@@ -446,15 +436,10 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 
 		break;
 	}
-	case COMP_HTTP_LANGUAGE: {
-		data_string *ds;
-		if (NULL != (ds = (data_string *)array_get_element(con->request.headers, "Accept-Language"))) {
-			l = ds->value;
-		} else {
-			l = srv->empty_string;
-		}
+	case COMP_PHYSICAL_PATH_EXISTS: 
+	case COMP_PHYSICAL_PATH: 
+		l = con->physical.path;
 		break;
-	}
 	default:
 		return COND_RESULT_FALSE;
 	}
@@ -468,9 +453,12 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 	}
 
 	if (con->conf.log_condition_handling) {
-		log_error_write(srv, __FILE__, __LINE__,  "bsbsb", dc->comp_key,
-				"(", l, ") compare to ", dc->string);
+		TRACE("'%s': '%s' is matched against '%s'", 
+				SAFE_BUF_STR(dc->comp_key),
+				SAFE_BUF_STR(l),
+				SAFE_BUF_STR(dc->string));
 	}
+
 	switch(dc->cond) {
 	case CONFIG_COND_NE:
 	case CONFIG_COND_EQ:
@@ -495,7 +483,8 @@ static cond_result_t config_check_cond_nocache(server *srv, connection *con, dat
 		cache->patterncount = n;
 		if (n > 0) {
 			cache->comp_value = l;
-			cache->comp_type  = dc->comp;
+			cache->comp_type = dc->comp;
+
 			return (dc->cond == CONFIG_COND_MATCH) ? COND_RESULT_TRUE : COND_RESULT_FALSE;
 		} else {
 			/* cache is already cleared */
@@ -516,12 +505,15 @@ static cond_result_t config_check_cond_cached(server *srv, connection *con, data
 	cond_cache_t *caches = con->cond_cache;
 
 	if (COND_RESULT_UNSET == caches[dc->context_ndx].result) {
+		if (con->conf.log_condition_handling) {
+			TRACE("=== start of %d condition block ===", dc->context_ndx);
+		}
 		if (COND_RESULT_TRUE == (caches[dc->context_ndx].result = config_check_cond_nocache(srv, con, dc))) {
+			/* a node evaluted to true, all else nodes have to false */
 			if (dc->next) {
 				data_config *c;
 				if (con->conf.log_condition_handling) {
-					log_error_write(srv, __FILE__, __LINE__, "s",
-							"setting remains of chaining to false");
+					TRACE("setting remains of chaining to %s", "false");
 				}
 				for (c = dc->next; c; c = c->next) {
 					caches[c->context_ndx].result = COND_RESULT_FALSE;
@@ -531,19 +523,22 @@ static cond_result_t config_check_cond_cached(server *srv, connection *con, data
 		caches[dc->context_ndx].comp_type = dc->comp;
 
 		if (con->conf.log_condition_handling) {
-			log_error_write(srv, __FILE__, __LINE__, "dss", dc->context_ndx,
-					"(uncached) result:",
-					caches[dc->context_ndx].result == COND_RESULT_UNSET ? "unknown" :
-						(caches[dc->context_ndx].result == COND_RESULT_TRUE ? "true" : "false"));
+			TRACE("[%d] result: %s",
+					dc->context_ndx,
+					caches[dc->context_ndx].result == COND_RESULT_UNSET ? "unknown" : 
+						(caches[dc->context_ndx].result == COND_RESULT_TRUE ? "true" : "false")
+					);
 		}
 	} else {
-		if (con->conf.log_condition_handling) {
-			log_error_write(srv, __FILE__, __LINE__, "dss", dc->context_ndx,
-					"(cached) result:",
+		if (con->conf.log_condition_cache_handling) {
+			TRACE("[%d] (cached) result: %s",
+					dc->context_ndx,
 					caches[dc->context_ndx].result == COND_RESULT_UNSET ? "unknown" : 
-						(caches[dc->context_ndx].result == COND_RESULT_TRUE ? "true" : "false"));
+						(caches[dc->context_ndx].result == COND_RESULT_TRUE ? "true" : "false")
+					);
 		}
 	}
+
 	return caches[dc->context_ndx].result;
 }
 
@@ -579,9 +574,6 @@ void config_cond_cache_reset(server *srv, connection *con) {
 }
 
 int config_check_cond(server *srv, connection *con, data_config *dc) {
-	if (con->conf.log_condition_handling) {
-		log_error_write(srv, __FILE__, __LINE__,  "s",  "=== start of condition block ===");
-	}
 	return (config_check_cond_cached(srv, con, dc) == COND_RESULT_TRUE);
 }
 
@@ -597,5 +589,87 @@ int config_append_cond_match_buffer(connection *con, data_config *dc, buffer *bu
 			cache->comp_value->ptr + cache->matches[n],
 			cache->matches[n + 1] - cache->matches[n]);
 	return 1;
+}
+
+/* return <0 on error
+ * return 0-x if matched (and replaced)
+ */
+int config_exec_pcre_keyvalue_buffer(connection *con, pcre_keyvalue_buffer *kvb, data_config *context, buffer *match_buf, buffer *result)
+{
+#ifdef HAVE_PCRE_H
+	pcre *match;
+	pcre_extra *extra;
+	const char *pattern;
+	size_t pattern_len;
+	int n;
+	size_t i;
+	pcre_keyvalue *kv;
+# define N 10
+	int ovec[N * 3];
+
+	for (i = 0; i < kvb->used; i++) {
+		kv = kvb->kv[i];
+
+		match       = kv->key;
+		extra       = kv->key_extra;
+		pattern     = kv->value->ptr;
+		pattern_len = kv->value->used - 1;
+
+		if ((n = pcre_exec(match, extra, match_buf->ptr, match_buf->used - 1, 0, 0, ovec, 3 * N)) < 0) {
+			if (n != PCRE_ERROR_NOMATCH) {
+				return n;
+			}
+		} else {
+			const char **list;
+			size_t start, end;
+			size_t k;
+
+			/* it matched */
+			pcre_get_substring_list(match_buf->ptr, ovec, n, &list);
+
+			/* search for $[0-9] */
+
+			buffer_reset(result);
+
+			start = 0; end = pattern_len;
+			for (k = 0; k < pattern_len; k++) {
+				if ((pattern[k] == '$' || pattern[k] == '%') &&
+				    isdigit((unsigned char)pattern[k + 1])) {
+					/* got one */
+
+					size_t num = pattern[k + 1] - '0';
+
+					end = k;
+
+					buffer_append_string_len(result, pattern + start, end - start);
+
+					if (pattern[k] == '$') {
+						/* n is always > 0 */
+						if (num < (size_t)n) {
+							buffer_append_string(result, list[num]);
+						}
+					} else {
+						config_append_cond_match_buffer(con, context, result, num);
+					}
+
+					k++;
+					start = k + 1;
+				}
+			}
+
+			buffer_append_string_len(result, pattern + start, pattern_len - start);
+
+			pcre_free(list);
+
+			return i;
+		}
+	}
+
+	return PCRE_ERROR_NOMATCH;
+#undef N
+#else
+	UNUSED(kvb);
+	return -2;
+#endif
 }
 

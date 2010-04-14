@@ -1,20 +1,25 @@
+#include <string.h>
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#if defined HAVE_STDINT_H
+#include <stdint.h>
+#elif defined HAVE_INTTYPES_H
+#include <inttypes.h>
+#endif
+
 #include "buffer.h"
 #include "etag.h"
 
-#if defined HAVE_STDINT_H
-# include <stdint.h>
-#elif defined HAVE_INTTYPES_H
-# include <inttypes.h>
-#endif
-
-#include <string.h>
-
 int etag_is_equal(buffer *etag, const char *matches) {
-	if (etag && !buffer_is_empty(etag) && 0 == strcmp(etag->ptr, matches)) return 1;
+	if (buffer_is_equal_string(etag, matches, strlen(matches))) return 1;
 	return 0;
 }
 
-int etag_create(buffer *etag, struct stat *st,etag_flags_t flags) {
+int etag_create(buffer *etag, struct stat *st, etag_flags_t flags) {
+
 	if (0 == flags) return 0;
 
 	buffer_reset(etag);
@@ -23,16 +28,13 @@ int etag_create(buffer *etag, struct stat *st,etag_flags_t flags) {
 		buffer_append_off_t(etag, st->st_ino);
 		buffer_append_string_len(etag, CONST_STR_LEN("-"));
 	}
-	
 	if (flags & ETAG_USE_SIZE) {
 		buffer_append_off_t(etag, st->st_size);
 		buffer_append_string_len(etag, CONST_STR_LEN("-"));
 	}
-	
 	if (flags & ETAG_USE_MTIME) {
 		buffer_append_long(etag, st->st_mtime);
 	}
-
 	return 0;
 }
 

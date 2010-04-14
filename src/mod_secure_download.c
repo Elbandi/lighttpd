@@ -1,12 +1,16 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
 
 #include "plugin.h"
 
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 #ifdef USE_OPENSSL
 # include <openssl/md5.h>
@@ -33,7 +37,7 @@ typedef struct {
 	buffer *secret;
 	buffer *uri_prefix;
 
-	unsigned int timeout;
+	unsigned short timeout;
 } plugin_config;
 
 typedef struct {
@@ -49,6 +53,8 @@ typedef struct {
 /* init the plugin data */
 INIT_FUNC(mod_secdownload_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -95,7 +101,7 @@ SETDEFAULTS_FUNC(mod_secdownload_set_defaults) {
 		{ "secdownload.secret",            NULL, T_CONFIG_STRING, T_CONFIG_SCOPE_CONNECTION },       /* 0 */
 		{ "secdownload.document-root",     NULL, T_CONFIG_STRING, T_CONFIG_SCOPE_CONNECTION },       /* 1 */
 		{ "secdownload.uri-prefix",        NULL, T_CONFIG_STRING, T_CONFIG_SCOPE_CONNECTION },       /* 2 */
-		{ "secdownload.timeout",           NULL, T_CONFIG_INT, T_CONFIG_SCOPE_CONNECTION },        /* 3 */
+		{ "secdownload.timeout",           NULL, T_CONFIG_SHORT, T_CONFIG_SCOPE_CONNECTION },        /* 3 */
 		{ NULL,                            NULL, T_CONFIG_UNSET, T_CONFIG_SCOPE_UNSET }
 	};
 
@@ -152,16 +158,14 @@ static int is_hex_len(const char *str, size_t len) {
 	return i == len;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_secdownload_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(secret);
-	PATCH(doc_root);
-	PATCH(uri_prefix);
-	PATCH(timeout);
+	PATCH_OPTION(secret);
+	PATCH_OPTION(doc_root);
+	PATCH_OPTION(uri_prefix);
+	PATCH_OPTION(timeout);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -176,21 +180,19 @@ static int mod_secdownload_patch_connection(server *srv, connection *con, plugin
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("secdownload.secret"))) {
-				PATCH(secret);
+				PATCH_OPTION(secret);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("secdownload.document-root"))) {
-				PATCH(doc_root);
+				PATCH_OPTION(doc_root);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("secdownload.uri-prefix"))) {
-				PATCH(uri_prefix);
+				PATCH_OPTION(uri_prefix);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("secdownload.timeout"))) {
-				PATCH(timeout);
+				PATCH_OPTION(timeout);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
-
 
 URIHANDLER_FUNC(mod_secdownload_uri_handler) {
 	plugin_data *p = p_d;
@@ -200,8 +202,6 @@ URIHANDLER_FUNC(mod_secdownload_uri_handler) {
 	time_t ts = 0;
 	size_t i;
 
-	if (con->mode != DIRECT) return HANDLER_GO_ON;
-
 	if (con->uri.path->used == 0) return HANDLER_GO_ON;
 
 	mod_secdownload_patch_connection(srv, con, p);
@@ -209,40 +209,78 @@ URIHANDLER_FUNC(mod_secdownload_uri_handler) {
 	if (buffer_is_empty(p->conf.uri_prefix)) return HANDLER_GO_ON;
 
 	if (buffer_is_empty(p->conf.secret)) {
-		log_error_write(srv, __FILE__, __LINE__, "s",
-				"secdownload.secret has to be set");
+		ERROR("secdownload.secret has to be set: %s", "");
+
 		return HANDLER_ERROR;
 	}
 
 	if (buffer_is_empty(p->conf.doc_root)) {
-		log_error_write(srv, __FILE__, __LINE__, "s",
-				"secdownload.document-root has to be set");
+		ERROR("secdownload.document-root has to be set: %s", "");
+		
 		return HANDLER_ERROR;
+	}
+
+	if (con->conf.log_request_handling) {
+		TRACE("-- handling %s in mod_secdownload", SAFE_BUF_STR(con->uri.path));
 	}
 
 	/*
 	 *  /<uri-prefix>[a-f0-9]{32}/[a-f0-9]{8}/<rel-path>
 	 */
 
-	if (0 != strncmp(con->uri.path->ptr, p->conf.uri_prefix->ptr, p->conf.uri_prefix->used - 1)) return HANDLER_GO_ON;
+	if (0 != strncmp(con->uri.path->ptr, p->conf.uri_prefix->ptr, p->conf.uri_prefix->used - 1)) {
+		if (con->conf.log_request_handling) {
+			TRACE("prefix '%s' didn't matched the url: %s", SAFE_BUF_STR(p->conf.uri_prefix), SAFE_BUF_STR(con->uri.path));
+		}
+
+		return HANDLER_GO_ON;
+	}
 
 	md5_str = con->uri.path->ptr + p->conf.uri_prefix->used - 1;
 
-	if (!is_hex_len(md5_str, 32)) return HANDLER_GO_ON;
-	if (*(md5_str + 32) != '/') return HANDLER_GO_ON;
+	if (!is_hex_len(md5_str, 32)) {
+		if (con->conf.log_request_handling) {
+			TRACE("expected a 32-char hex-val as md5-hash: %s", SAFE_BUF_STR(con->uri.path));
+		}
+
+		return HANDLER_GO_ON;
+	}
+	if (*(md5_str + 32) != '/') {
+		if (con->conf.log_request_handling) {
+			TRACE("missing a / after the md5-hash: %s", SAFE_BUF_STR(con->uri.path));
+		}
+
+		return HANDLER_GO_ON;
+	}
 
 	ts_str = md5_str + 32 + 1;
 
-	if (!is_hex_len(ts_str, 8)) return HANDLER_GO_ON;
-	if (*(ts_str + 8) != '/') return HANDLER_GO_ON;
+	if (!is_hex_len(ts_str, 8)) {
+		if (con->conf.log_request_handling) {
+			TRACE("expected a 8-char hex-val after md5-hash: %s", SAFE_BUF_STR(con->uri.path));
+		}
+
+		return HANDLER_GO_ON;
+	}
+	if (*(ts_str + 8) != '/') {
+		if (con->conf.log_request_handling) {
+			TRACE("missing a / after the timestamp: %s", SAFE_BUF_STR(con->uri.path));
+		}
+
+		return HANDLER_GO_ON;
+	}
 
 	for (i = 0; i < 8; i++) {
 		ts = (ts << 4) + hex2int(*(ts_str + i));
 	}
 
 	/* timed-out */
-	if ( (srv->cur_ts > ts && (unsigned int) (srv->cur_ts - ts) > p->conf.timeout) ||
-	     (srv->cur_ts < ts && (unsigned int) (ts - srv->cur_ts) > p->conf.timeout) ) {
+	if ( (srv->cur_ts > ts && srv->cur_ts - ts > p->conf.timeout) ||
+	     (srv->cur_ts < ts && ts - srv->cur_ts > p->conf.timeout) ) {
+		if (con->conf.log_request_handling) {
+			TRACE("timestamp is too old: %ld, timeout: %d", ts, p->conf.timeout);
+		}
+
 		/* "Gone" as the url will never be valid again instead of "408 - Timeout" where the request may be repeated */
 		con->http_status = 410;
 
@@ -269,9 +307,7 @@ URIHANDLER_FUNC(mod_secdownload_uri_handler) {
 	if (0 != strncasecmp(md5_str, p->md5->ptr, 32)) {
 		con->http_status = 403;
 
-		log_error_write(srv, __FILE__, __LINE__, "sss",
-				"md5 invalid:",
-				md5_str, p->md5->ptr);
+		TRACE("MD5 didn't matched: %s == %s", md5_str, SAFE_BUF_STR(p->md5));
 
 		return HANDLER_FINISHED;
 	}
@@ -284,13 +320,17 @@ URIHANDLER_FUNC(mod_secdownload_uri_handler) {
 	buffer_copy_string_buffer(con->physical.path, con->physical.doc_root);
 	buffer_append_string_buffer(con->physical.path, con->physical.rel_path);
 
+	if (con->conf.log_request_handling) {
+		TRACE("MD5 matched, timestamp is ok, sending %s", SAFE_BUF_STR(con->physical.path));
+	}
+
 	return HANDLER_GO_ON;
 }
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_secdownload_plugin_init(plugin *p);
-int mod_secdownload_plugin_init(plugin *p) {
+LI_EXPORT int mod_secdownload_plugin_init(plugin *p);
+LI_EXPORT int mod_secdownload_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("secdownload");
 

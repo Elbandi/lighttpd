@@ -8,14 +8,14 @@ BEGIN {
 
 use strict;
 use IO::Socket;
-use Test::More tests => 13;
+use Test::More tests => 12;
 use LightyTest;
 
 my $tf = LightyTest->new();
 my $t;
 
 $tf->{CONFIGFILE} = 'lighttpd.conf';
-
+    
 ok($tf->start_proc == 0, "Starting lighttpd") or die();
 
 ## check if If-Modified-Since, If-None-Match works
@@ -107,15 +107,6 @@ EOF
  );
 $t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 412 } ];
 ok($tf->handle_http($t) == 0, 'Conditional GET - ETag + Last-Modified + overlong timestamp');
-
-$t->{REQUEST}  = ( <<EOF
-GET / HTTP/1.0
-If-None-Match: $etag
-Host: etag.example.org
-EOF
- );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200 } ];
-ok($tf->handle_http($t) == 0, 'Conditional GET - ETag + disabled etags on server side');
 
 ok($tf->stop_proc == 0, "Stopping lighttpd");
 

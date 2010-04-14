@@ -1,11 +1,11 @@
-#include "buffer.h"
-
 #include <stdlib.h>
 #include <string.h>
 
 #include <stdio.h>
 #include <assert.h>
 #include <ctype.h>
+
+#include "buffer.h"
 
 
 static const char hex_chars[] = "0123456789abcdef";
@@ -65,7 +65,7 @@ void buffer_reset(buffer *b) {
 
 /**
  *
- * allocate (if neccessary) enough space for 'size' bytes and
+ * allocate (if necessary) enough space for 'size' (+1, if 'size' > 0) bytes and
  * set the 'used' counter to 0
  *
  */
@@ -76,12 +76,13 @@ int buffer_prepare_copy(buffer *b, size_t size) {
 	if (!b) return -1;
 
 	if ((0 == b->size) ||
-	    (size > b->size)) {
+	    (size >= b->size)) {
 		if (b->size) free(b->ptr);
 
 		b->size = size;
 
-		/* always allocate a multiply of BUFFER_PIECE_SIZE */
+		/* always allocate a multiple of BUFFER_PIECE_SIZE */
+		/* adds a least 1 byte */
 		b->size += BUFFER_PIECE_SIZE - (b->size % BUFFER_PIECE_SIZE);
 
 		b->ptr = malloc(b->size);
@@ -93,7 +94,7 @@ int buffer_prepare_copy(buffer *b, size_t size) {
 
 /**
  *
- * increase the internal buffer (if neccessary) to append another 'size' byte
+ * increase the internal buffer (if necessary) to append another 'size' byte
  * ->used isn't changed
  *
  */
@@ -104,16 +105,16 @@ int buffer_prepare_append(buffer *b, size_t size) {
 	if (0 == b->size) {
 		b->size = size;
 
-		/* always allocate a multiply of BUFFER_PIECE_SIZE */
+		/* always allocate a multiple of BUFFER_PIECE_SIZE */
 		b->size += BUFFER_PIECE_SIZE - (b->size % BUFFER_PIECE_SIZE);
 
 		b->ptr = malloc(b->size);
 		b->used = 0;
 		assert(b->ptr);
-	} else if (b->used + size > b->size) {
+	} else if (b->used + size >= b->size) {
 		b->size += size;
 
-		/* always allocate a multiply of BUFFER_PIECE_SIZE */
+		/* always allocate a multiple of BUFFER_PIECE_SIZE */
 		b->size += BUFFER_PIECE_SIZE - (b->size % BUFFER_PIECE_SIZE);
 
 		b->ptr = realloc(b->ptr, b->size);
@@ -206,7 +207,7 @@ int buffer_append_string_rfill(buffer *b, const char *s, size_t maxlen) {
  * append a string to the end of the buffer
  *
  * the resulting buffer is terminated with a '\0'
- * s is treated as a un-terminated string (a \0 is handled a normal character)
+ * s is treated as an un-terminated string (a \0 is handled as a normal character)
  *
  * @param b a buffer
  * @param s the string
@@ -405,6 +406,75 @@ char hex2int(unsigned char hex) {
 
 
 /**
+ * init the ptr buffer
+ *
+ */
+buffer_ptr *buffer_ptr_init(buffer_ptr_free_t freer)
+{
+	buffer_ptr *l = calloc(1, sizeof(buffer_ptr));
+	l->free = freer;
+
+	return l;
+}
+
+/**
+ * free the buffer_array
+ *
+ */
+void buffer_ptr_free(buffer_ptr *l)
+{
+	if (NULL != l) {
+		buffer_ptr_clear(l);
+		free(l);
+	}
+}
+
+void buffer_ptr_clear(buffer_ptr *l)
+{
+	assert(NULL != l);
+
+	if (l->free && l->used) {
+		size_t i;
+		for (i = 0; i < l->used; i ++) {
+			l->free(l->ptr[i]);
+		}
+	}
+
+	if (l->ptr) {
+		free(l->ptr);
+		l->ptr = NULL;
+	}
+	l->used = 0;
+	l->size = 0;
+}
+
+void buffer_ptr_append(buffer_ptr* l, void *item)
+{
+	assert(NULL != l);
+	if (l->ptr == NULL) {
+		l->size = 16;
+		l->ptr = (void **)malloc(sizeof(void *) * l->size);
+	}
+	else if (l->used == l->size) {
+		l->size += 16;
+		l->ptr = realloc(l->ptr, sizeof(void *) * l->size);
+	}
+	l->ptr[l->used++] = item;
+}
+
+void *buffer_ptr_pop(buffer_ptr* l)
+{
+	assert(NULL != l && l->used > 0);
+	return l->ptr[--l->used];
+}
+
+void *buffer_ptr_top(buffer_ptr* l)
+{
+	assert(NULL != l && l->used > 0);
+	return l->ptr[l->used-1];
+}
+
+/**
  * init the buffer
  *
  */
@@ -507,11 +577,12 @@ buffer *buffer_init_string(const char *str) {
 
 int buffer_is_empty(buffer *b) {
 	if (!b) return 1;
+
 	return (b->used == 0);
 }
 
 /**
- * check if two buffer contain the same data
+ * check if two buffers contain the same data
  *
  * HISTORY: this function was pretty much optimized, but didn't handled
  * alignment properly.
@@ -521,7 +592,7 @@ int buffer_is_equal(buffer *a, buffer *b) {
 	if (a->used != b->used) return 0;
 	if (a->used == 0) return 1;
 
-	return (0 == strcmp(a->ptr, b->ptr));
+	return (0 == strncmp(a->ptr, b->ptr, a->used - 1));
 }
 
 int buffer_is_equal_string(buffer *a, const char *s, size_t b_len) {
@@ -535,7 +606,7 @@ int buffer_is_equal_string(buffer *a, const char *s, size_t b_len) {
 
 /* simple-assumption:
  *
- * most parts are equal and doing a case conversion needs time
+ * most parts are equal and doing a case conversion takes time
  *
  */
 int buffer_caseless_compare(const char *a, size_t a_len, const char *b, size_t b_len) {
@@ -546,7 +617,7 @@ int buffer_caseless_compare(const char *a, size_t a_len, const char *b, size_t b
 	al = (size_t *)a;
 	bl = (size_t *)b;
 
-	/* is the alignment correct ? */
+	/* is the alignment correct? */
 	if ( ((size_t)al & mask) == 0 &&
 	     ((size_t)bl & mask) == 0 ) {
 
@@ -602,7 +673,7 @@ int buffer_is_equal_right_len(buffer *b1, buffer *b2, size_t len) {
 	if (b1->used == 0 || b2->used == 0) return 0;
 
 	/* buffers too small -> not equal */
-	if (b1->used - 1 < len || b1->used - 1 < len) return 0;
+	if (b1->used - 1 < len || b2->used - 1 < len) return 0;
 
 	if (0 == strncmp(b1->ptr + b1->used - 1 - len,
 			 b2->ptr + b2->used - 1 - len, len)) {
@@ -741,29 +812,6 @@ const char encoded_chars_hex[] = {
 	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  /*  F0 -  FF */
 };
 
-const char encoded_chars_http_header[] = {
-	/*
-	0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
-	*/
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,  /*  00 -  0F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  10 -  1F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  20 -  2F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  30 -  3F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  40 -  4F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  50 -  5F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  60 -  6F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  70 -  7F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  80 -  8F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  90 -  9F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  A0 -  AF */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  B0 -  BF */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  C0 -  CF */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  D0 -  DF */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  E0 -  EF */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /*  F0 -  FF */
-};
-
-
 
 int buffer_append_string_encoded(buffer *b, const char *s, size_t s_len, buffer_encoding_t encoding) {
 	unsigned char *ds, *d;
@@ -771,10 +819,9 @@ int buffer_append_string_encoded(buffer *b, const char *s, size_t s_len, buffer_
 	const char *map = NULL;
 
 	if (!s || !b) return -1;
+	if (b->used == 0) return -1;
 
-	if (b->ptr[b->used - 1] != '\0') {
-		SEGFAULT();
-	}
+	if (b->ptr[b->used - 1] != '\0') return -1;
 
 	if (s_len == 0) return 0;
 
@@ -794,16 +841,13 @@ int buffer_append_string_encoded(buffer *b, const char *s, size_t s_len, buffer_
 	case ENCODING_HEX:
 		map = encoded_chars_hex;
 		break;
-	case ENCODING_HTTP_HEADER:
-		map = encoded_chars_http_header;
-		break;
 	case ENCODING_UNSET:
-		break;
+		return buffer_append_string_len(b, s, s_len);
 	}
 
 	assert(map != NULL);
 
-	/* count to-be-encoded-characters */
+	/* count to-be-encoded characters */
 	for (ds = (unsigned char *)s, d_len = 0, ndx = 0; ndx < s_len; ds++, ndx++) {
 		if (map[*ds]) {
 			switch(encoding) {
@@ -815,7 +859,6 @@ int buffer_append_string_encoded(buffer *b, const char *s, size_t s_len, buffer_
 			case ENCODING_MINIMAL_XML:
 				d_len += 6;
 				break;
-			case ENCODING_HTTP_HEADER:
 			case ENCODING_HEX:
 				d_len += 2;
 				break;
@@ -851,10 +894,6 @@ int buffer_append_string_encoded(buffer *b, const char *s, size_t s_len, buffer_
 				d[d_len++] = hex_chars[((*ds) >> 4) & 0x0F];
 				d[d_len++] = hex_chars[(*ds) & 0x0F];
 				break;
-			case ENCODING_HTTP_HEADER:
-				d[d_len++] = *ds;
-				d[d_len++] = '\t';
-				break;
 			case ENCODING_UNSET:
 				break;
 			}
@@ -872,7 +911,7 @@ int buffer_append_string_encoded(buffer *b, const char *s, size_t s_len, buffer_
 }
 
 
-/* decodes url-special-chars inplace.
+/* decodes url-special chars in-place.
  * replaces non-printable characters with '_'
  */
 
@@ -898,7 +937,7 @@ static int buffer_urldecode_internal(buffer *url, int is_query) {
 				if (low != 0xFF) {
 					high = (high << 4) | low;
 
-					/* map control-characters out */
+					/* map out control characters */
 					if (high < 32 || high == 127) high = '_';
 
 					*dst = high;
@@ -934,7 +973,7 @@ int buffer_urldecode_query(buffer *url) {
  * /abc/./xyz       gets  /abc/xyz
  * /abc//xyz        gets  /abc/xyz
  *
- * NOTE: src and dest can point to the same buffer, in which case,
+ * NOTE: src and dest can point to the same buffer, in which case
  *       the operation is performed in-place.
  */
 
@@ -957,18 +996,6 @@ int buffer_path_simplify(buffer *dest, buffer *src)
 	start = dest->ptr;
 	out   = dest->ptr;
 	slash = dest->ptr;
-
-
-#if defined(__WIN32) || defined(__CYGWIN__)
-	/* cygwin is treating \ and / the same, so we have to that too
-	 */
-
-	for (walk = src->ptr; *walk; walk++) {
-		if (*walk == '\\') *walk = '/';
-	}
-	walk = src->ptr;
-#endif
-
 	while (*walk == ' ') {
 		walk++;
 	}
@@ -1048,6 +1075,31 @@ int light_isalnum(int c) {
 	return light_isdigit(c) || light_isalpha(c);
 }
 
+#undef BUFFER_CTYPE_FUNC
+#define BUFFER_CTYPE_FUNC(type) \
+	int buffer_is##type(buffer *b) { \
+		size_t i, len; \
+		if (b->used < 2) return 0; \
+		/* strlen */ \
+		len = b->used - 1; \
+		/* c-string only */ \
+		if (b->ptr[len] != '\0') { \
+			return 0; \
+		} \
+		/* check on the whole string */ \
+		for (i = 0; i < len; i ++) { \
+			if (!light_is##type(b->ptr[i])) { \
+				return 0; \
+			} \
+		} \
+		return 1; \
+	}
+
+BUFFER_CTYPE_FUNC(digit)
+BUFFER_CTYPE_FUNC(xdigit)
+BUFFER_CTYPE_FUNC(alpha)
+BUFFER_CTYPE_FUNC(alnum)
+
 int buffer_to_lower(buffer *b) {
 	char *c;
 
@@ -1076,3 +1128,43 @@ int buffer_to_upper(buffer *b) {
 
 	return 0;
 }
+
+buffer_pool *buffer_pool_init() {
+	buffer_pool *bp;
+
+	bp = calloc(1, sizeof(*bp));
+
+	return bp;
+}
+
+void buffer_pool_free(buffer_pool *bp) {
+	if (!bp) return;
+
+	ARRAY_STATIC_FREE(bp, buffer, b, buffer_free(b));
+
+	free(bp);
+
+	return;
+}
+
+buffer *buffer_pool_get(buffer_pool *bp) {
+	buffer *b;
+
+	if (bp->used == 0) {
+		return buffer_init();
+	}
+
+	b = bp->ptr[--bp->used];
+
+	buffer_reset(b);
+
+	return b;
+}
+
+void buffer_pool_append(buffer_pool *bp, buffer *b) {
+	ARRAY_STATIC_PREPARE_APPEND(bp);
+
+	bp->ptr[bp->used++] = b;
+}
+
+

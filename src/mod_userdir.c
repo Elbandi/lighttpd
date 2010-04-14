@@ -1,3 +1,8 @@
+#include <sys/types.h>
+
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -5,14 +10,10 @@
 #include "response.h"
 
 #include "plugin.h"
-
-#include <sys/types.h>
-
-#include <stdlib.h>
-#include <string.h>
+#include "sys-files.h"
 
 #ifdef HAVE_PWD_H
-# include <pwd.h>
+#include <pwd.h>
 #endif
 
 /* plugin config for all request/connections */
@@ -38,6 +39,8 @@ typedef struct {
 /* init the plugin data */
 INIT_FUNC(mod_userdir_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -122,17 +125,15 @@ SETDEFAULTS_FUNC(mod_userdir_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_userdir_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(path);
-	PATCH(exclude_user);
-	PATCH(include_user);
-	PATCH(basepath);
-	PATCH(letterhomes);
+	PATCH_OPTION(path);
+	PATCH_OPTION(exclude_user);
+	PATCH_OPTION(include_user);
+	PATCH_OPTION(basepath);
+	PATCH_OPTION(letterhomes);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -147,22 +148,21 @@ static int mod_userdir_patch_connection(server *srv, connection *con, plugin_dat
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("userdir.path"))) {
-				PATCH(path);
+				PATCH_OPTION(path);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("userdir.exclude-user"))) {
-				PATCH(exclude_user);
+				PATCH_OPTION(exclude_user);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("userdir.include-user"))) {
-				PATCH(include_user);
+				PATCH_OPTION(include_user);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("userdir.basepath"))) {
-				PATCH(basepath);
+				PATCH_OPTION(basepath);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("userdir.letterhomes"))) {
-				PATCH(letterhomes);
+				PATCH_OPTION(letterhomes);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 URIHANDLER_FUNC(mod_userdir_docroot_handler) {
 	plugin_data *p = p_d;
@@ -176,11 +176,6 @@ URIHANDLER_FUNC(mod_userdir_docroot_handler) {
 	if (con->uri.path->used == 0) return HANDLER_GO_ON;
 
 	mod_userdir_patch_connection(srv, con, p);
-
-	/* enforce the userdir.path to be set in the config, ugly fix for #1587;
-	 * should be replaced with a clean .enabled option in 1.5
-	 */
-	if (p->conf.path->used == 0) return HANDLER_GO_ON;
 
 	uri_len = con->uri.path->used - 1;
 
@@ -267,14 +262,14 @@ URIHANDLER_FUNC(mod_userdir_docroot_handler) {
 		}
 
 		buffer_copy_string_buffer(p->temp_path, p->conf.basepath);
-		BUFFER_APPEND_SLASH(p->temp_path);
+		PATHNAME_APPEND_SLASH(p->temp_path);
 		if (p->conf.letterhomes) {
 			buffer_append_string_len(p->temp_path, p->username->ptr, 1);
-			BUFFER_APPEND_SLASH(p->temp_path);
+			PATHNAME_APPEND_SLASH(p->temp_path);
 		}
 		buffer_append_string_buffer(p->temp_path, p->username);
 	}
-	BUFFER_APPEND_SLASH(p->temp_path);
+	PATHNAME_APPEND_SLASH(p->temp_path);
 	buffer_append_string_buffer(p->temp_path, p->conf.path);
 
 	if (buffer_is_empty(p->conf.basepath)) {
@@ -294,7 +289,7 @@ URIHANDLER_FUNC(mod_userdir_docroot_handler) {
 	 * (docroot should only set the docroot/server name, phyiscal should only change the phyiscal.path;
 	 *  the exception mod_secure_download doesn't work with userdir anyway)
 	 */
-	BUFFER_APPEND_SLASH(p->temp_path);
+	PATHNAME_APPEND_SLASH(p->temp_path);
 	/* if no second '/' is found, we assume that it was stripped from the uri.path for the special handling
 	 * on windows.
 	 * we do not care about the trailing slash here on windows, as we already ensured it is a directory
@@ -314,8 +309,8 @@ URIHANDLER_FUNC(mod_userdir_docroot_handler) {
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_userdir_plugin_init(plugin *p);
-int mod_userdir_plugin_init(plugin *p) {
+LI_EXPORT int mod_userdir_plugin_init(plugin *p);
+LI_EXPORT int mod_userdir_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("userdir");
 

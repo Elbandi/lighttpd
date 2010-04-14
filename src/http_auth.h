@@ -17,6 +17,15 @@ typedef enum {
 	AUTH_BACKEND_HTDIGEST
 } auth_backend_t;
 
+#ifdef USE_LDAP
+typedef struct {
+	LDAP *ldap;
+
+	buffer *ldap_filter_pre;
+	buffer *ldap_filter_post;
+} ldap_plugin_config;
+#endif
+
 typedef struct {
 	/* auth */
 	array  *auth_require;
@@ -29,12 +38,14 @@ typedef struct {
 
 	buffer *auth_backend_conf;
 
-	buffer *auth_ldap_hostname;
+	buffer *auth_ldap_url;
 	buffer *auth_ldap_basedn;
 	buffer *auth_ldap_binddn;
 	buffer *auth_ldap_bindpw;
 	buffer *auth_ldap_filter;
 	buffer *auth_ldap_cafile;
+	buffer *auth_ldap_cert;
+	buffer *auth_ldap_key;
 	unsigned short auth_ldap_starttls;
 	unsigned short auth_ldap_allow_empty_pw;
 
@@ -44,10 +55,7 @@ typedef struct {
 	auth_backend_t auth_backend;
 
 #ifdef USE_LDAP
-	LDAP *ldap;
-
-	buffer *ldap_filter_pre;
-	buffer *ldap_filter_post;
+	ldap_plugin_config *ldap;
 #endif
 } mod_auth_plugin_config;
 
@@ -63,7 +71,7 @@ typedef struct {
 
 	mod_auth_plugin_config **config_storage;
 
-	mod_auth_plugin_config conf, *anon_conf; /* this is only used as long as no handler_ctx is setup */
+	mod_auth_plugin_config conf; /* this is only used as long as no handler_ctx is setup */
 } mod_auth_plugin_data;
 
 int http_auth_basic_check(server *srv, connection *con, mod_auth_plugin_data *p, array *req, buffer *url, const char *realm_str);

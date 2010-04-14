@@ -3,11 +3,11 @@
 
 #include "base.h"
 
-int joblist_append(server *srv, connection *con);
-void joblist_free(server *srv, connections *joblist);
+LI_API int joblist_append(server *srv, connection *con);
+LI_API void joblist_free(server *srv, connections *joblist);
 
-int fdwaitqueue_append(server *srv, connection *con);
-void fdwaitqueue_free(server *srv, connections *fdwaitqueue);
-connection *fdwaitqueue_unshift(server *srv, connections *fdwaitqueue);
+LI_API int fdwaitqueue_append(server *srv, connection *con);
+LI_API void fdwaitqueue_free(server *srv, connections *fdwaitqueue);
+LI_API connection* fdwaitqueue_unshift(server *srv, connections *fdwaitqueue);
 
 #endif

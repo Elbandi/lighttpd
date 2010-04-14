@@ -1,19 +1,15 @@
-dnl                                               -*- Autoconf -*-
-dnl Process this file with autoconf to produce a configure script.
+#                                               -*- Autoconf -*-
+# Process this file with autoconf to produce a configure script.
 AC_PREREQ(2.57)
-AC_INIT([lighttpd], [1.4.26], [contact@lighttpd.net])
+AC_INIT([lighttpd], [1.5.0], [contact@lighttpd.net])
 AC_CONFIG_SRCDIR([src/server.c])
 AC_CONFIG_HEADER([config.h])
-AC_CONFIG_MACRO_DIR([m4])
 
 AC_CANONICAL_TARGET
 
-AM_INIT_AUTOMAKE([-Wall -Wportability -Wno-override -Werror foreign dist-bzip2 tar-ustar])
+AM_INIT_AUTOMAKE
 
-dnl enable with --enable-silent-rules or make V=0 (needs automake >= 1.11)
-m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES])
-
-dnl Checks for programs.
+# Checks for programs.
 AC_PROG_CC
 AM_PROG_CC_C_O
 AC_PROG_LD
@@ -32,7 +28,7 @@ AC_MINIX
 dnl AC_CANONICAL_HOST
 case $host_os in
 	*darwin*|*cygwin*|*aix*|*mingw* ) NO_RDYNAMIC=yes;;
-	* ) NO_RDYNAMIC=no;;
+        * ) NO_RDYNAMIC=no;;
 esac
 AM_CONDITIONAL(NO_RDYNAMIC, test x$NO_RDYNAMIC = xyes)
 
@@ -42,25 +38,25 @@ dnl more automake stuff
 AM_C_PROTOTYPES
 
 dnl libtool
-AC_DISABLE_STATIC
+AC_DISABLE_STATIC	
 AC_ENABLE_SHARED
 
 AC_LIBTOOL_DLOPEN
 AC_PROG_LIBTOOL
 
-dnl for solaris
+dnl for solaris 
 CPPFLAGS="${CPPFLAGS} -D_REENTRANT -D__EXTENSIONS__"
 
-dnl Checks for header files.
+# Checks for header files.
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
 AC_CHECK_HEADERS([arpa/inet.h fcntl.h netinet/in.h stdlib.h string.h \
 sys/socket.h sys/time.h unistd.h sys/sendfile.h sys/uio.h \
 getopt.h sys/epoll.h sys/select.h poll.h sys/poll.h sys/devpoll.h sys/filio.h \
 sys/mman.h sys/event.h sys/port.h pwd.h sys/syslimits.h \
-sys/resource.h sys/un.h syslog.h sys/prctl.h uuid/uuid.h])
+sys/resource.h sys/un.h syslog.h sys/prctl.h pthread.h])
 
-dnl Checks for typedefs, structures, and compiler characteristics.
+# Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST
 AC_C_INLINE
 AC_C_CHAR_UNSIGNED
@@ -73,15 +69,15 @@ AC_CHECK_TYPES(struct sockaddr_storage,,,[#include <sys/socket.h>])
 AC_CHECK_TYPES(socklen_t,,,[#include <sys/types.h>
 #include <sys/socket.h>])
 
-dnl Checks for library functions.
+# Checks for library functions.
 AC_FUNC_FORK
 dnl AC_FUNC_MALLOC
-dnl AC_FUNC_MMAP
+#AC_FUNC_MMAP
 dnl AC_FUNC_REALLOC
 AC_TYPE_SIGNAL
 AC_FUNC_STAT
 AC_FUNC_STRFTIME
-AC_CHECK_FUNCS([issetugid inet_pton])
+AC_CHECK_FUNCS([issetugid])
 
 dnl Checks for database.
 MYSQL_INCLUDE=""
@@ -93,7 +89,7 @@ AC_ARG_WITH(mysql,
     [WITH_MYSQL=$withval],[WITH_MYSQL=no])
 
 if test "$WITH_MYSQL" != "no"; then
-  AC_MSG_RESULT(yes)
+  AC_MSG_RESULT(yes)  
   if test "$WITH_MYSQL" = "yes"; then
     AC_PATH_PROG(MYSQL_CONFIG, mysql_config)
   else
@@ -133,6 +129,57 @@ fi
 AC_SUBST(MYSQL_LIBS)
 AC_SUBST(MYSQL_INCLUDE)
 
+POSTGRESQL_INCLUDE=""
+POSTGRESQL_LIBS=""
+
+AC_MSG_CHECKING(for PostgreSQL support)
+AC_ARG_WITH(postgresql,
+    AC_HELP_STRING([--with-postgresql@<:@=PATH@:>@],[Include PostgreSQL support. PATH is the path to 'pg_config']),
+    [WITH_POSTGRESQL=$withval],[WITH_POSTGRESQL=no])
+
+if test "$WITH_POSTGRESQL" != "no"; then
+  AC_MSG_RESULT($WITH_POSTGRESQL)
+  if test "$WITH_POSTGRESQL" = "yes"; then
+    AC_PATH_PROG(POSTGRESQL_CONFIG, pg_config)
+  else
+    POSTGRESQL_CONFIG=$WITH_POSTGRESQL
+  fi
+
+  if test "$POSTGRESQL_CONFIG" = ""; then
+    AC_MSG_ERROR(pg_config is not found)
+  fi
+  if test \! -x $POSTGRESQL_CONFIG; then
+    AC_MSG_ERROR($POSTGRESQL_CONFIG not exists or not executable, use --with-postgresql=path-to-pg_config)
+  fi
+
+  AC_MSG_CHECKING(for PostgreSQL includes at)
+  if $POSTGRESQL_CONFIG --help | grep -- '--includedir' > /dev/null ; then
+    POSTGRESQL_INCLUDE="-I`$POSTGRESQL_CONFIG --includedir | sed s/\'//g`"
+  else
+    POSTGRESQL_INCLUDE="`$POSTGRESQL_CONFIG --cflags | sed s/\'//g`"
+  fi
+  AC_MSG_RESULT($POSTGRESQL_INCLUDE)
+
+  AC_MSG_CHECKING(for PostgreSQL libraries at)
+  if test x"`$POSTGRESQL_CONFIG --libdir`" != "x"; then
+    POSTGRESQL_LIBS="-L`$POSTGRESQL_CONFIG --libdir`"
+  fi
+  POSTGRESQL_LIBS="$POSTGRESQL_LIBS -lpgport -lpq -lrt"
+  AC_MSG_RESULT($POSTGRESQL_LIBS)
+
+  old_CPPFLAGS="$CPPFLAGS"
+  CPPFLAGS="$CPPFLAGS $POSTGRESQL_INCLUDE"
+  AC_CHECK_HEADERS(libpq-fe.h)
+  CPPFLAGS="$old_CPPFLAGS"
+
+  AC_DEFINE([HAVE_POSTGRESQL], [1], [postgresql support])
+else
+  AC_MSG_RESULT(no)
+fi
+
+AC_SUBST(POSTGRESQL_LIBS)
+AC_SUBST(POSTGRESQL_INCLUDE)
+
 dnl Check for LDAP
 AC_MSG_CHECKING(for LDAP support)
 AC_ARG_WITH(ldap, AC_HELP_STRING([--with-ldap],[enable LDAP support]),
@@ -144,7 +191,6 @@ if test "$WITH_LDAP" != "no"; then
     LDAP_LIB=-lldap
     AC_DEFINE([HAVE_LIBLDAP], [1], [libldap])
     AC_DEFINE([HAVE_LDAP_H], [1])
-    AC_DEFINE([LDAP_DEPRECATED], [1], [Using deprecated ldap api])
   ])
  ])
  AC_SUBST(LDAP_LIB)
@@ -174,7 +220,7 @@ if test "$WITH_ATTR" != "no"; then
  AC_SUBST(ATTR_LIB)
 fi
 
-dnl openssl on solaris needs -lsocket -lnsl
+## openssl on solaris needs -lsocket -lnsl
 AC_SEARCH_LIBS(socket,socket)
 AC_SEARCH_LIBS(gethostbyname,nsl socket)
 AC_SEARCH_LIBS(hstrerror,resolv)
@@ -241,8 +287,8 @@ if test "x$use_openssl" = "xyes"; then
 
     AC_CHECK_HEADERS([openssl/ssl.h])
     OLDLIBS="$LIBS"
-    AC_CHECK_LIB(crypto, BIO_f_base64, [
-      AC_CHECK_LIB(ssl, SSL_new, [ SSL_LIB="-lssl -lcrypto"
+    AC_CHECK_LIB(crypto, BIO_f_base64, [ 
+      AC_CHECK_LIB(ssl, SSL_new, [ SSL_LIB="-lssl -lcrypto" 
 				 AC_DEFINE(HAVE_LIBSSL, [], [Have libssl]) ], [], [ -lcrypto "$DL_LIB" ])
     ], [], [])
     LIBS="$OLDLIBS"
@@ -257,35 +303,32 @@ AC_MSG_RESULT([$WITH_PCRE])
 if test "$WITH_PCRE" != "no"; then
   AC_PATH_PROG(PCRECONFIG, pcre-config)
 
-  if test x"$PCRECONFIG" != x; then
+  if test x"$PCRECONFIG" != x; then 
     PCRE_LIB=`$PCRECONFIG --libs`
     CPPFLAGS="$CPPFLAGS `$PCRECONFIG --cflags`"
-    AC_DEFINE([HAVE_LIBPCRE], [1], [libpcre])
-    AC_DEFINE([HAVE_PCRE_H], [1], [pcre.h])
+    OLDLIBS="$LIBS"
+    LIBS="$LIBS $PCRE_LIB"
+    AC_CHECK_LIB(pcre, pcre_compile, [
+      AC_CHECK_HEADERS([pcre.h], [
+        AC_DEFINE([HAVE_LIBPCRE], [1], [libpcre])
+        AC_DEFINE([HAVE_PCRE_H], [1])
+      ])
+    ])
+    LIBS="$OLDLIBS"
   else
-     AC_MSG_ERROR([pcre-config not found, install the pcre-devel package or build with --without-pcre])
+    AC_MSG_ERROR([pcre-config wasn't found. Either install pcre and its headers or re-run with --without-pcre])
   fi
 fi
 
 AC_SUBST(PCRE_LIB)
 
-AC_MSG_CHECKING(for zlib support)
-AC_ARG_WITH(zlib, AC_HELP_STRING([--with-zlib],[Enable zlib support for mod_compress]),
-    [WITH_ZLIB=$withval],[WITH_ZLIB=yes])
-AC_MSG_RESULT([$WITH_ZLIB])
-
-if test "$WITH_ZLIB" != "no"; then
-  AC_CHECK_LIB(z, deflate, [
-    AC_CHECK_HEADERS([zlib.h],[
-      Z_LIB=-lz
-      AC_DEFINE([HAVE_LIBZ], [1], [libz])
-      AC_DEFINE([HAVE_ZLIB_H], [1])
-    ])
+AC_CHECK_LIB(z, deflate, [
+  AC_CHECK_HEADERS([zlib.h],[
+    Z_LIB=-lz
+    AC_DEFINE([HAVE_LIBZ], [1], [libz])
+    AC_DEFINE([HAVE_ZLIB_H], [1])
   ])
-  if test x$Z_LIB = x; then
-     AC_MSG_ERROR([zlib-headers and/or libs where not found, install them or build with --without-zlib])
-  fi
-fi
+])
 AC_SUBST(Z_LIB)
 
 AC_MSG_CHECKING(for bzip2 support)
@@ -301,44 +344,11 @@ if test "$WITH_BZIP2" != "no"; then
       AC_DEFINE([HAVE_BZLIB_H], [1])
     ])
   ])
-  if test x$BZ_LIB = x; then
-     AC_MSG_ERROR([bzip2-headers and/or libs where not found, install them or build with --without-bzip2])
-  fi
 fi
 AC_SUBST(BZ_LIB)
 
 if test -z "$PKG_CONFIG"; then
   AC_PATH_PROG(PKG_CONFIG, pkg-config, no)
-fi
-
-dnl Check for gamin
-AC_MSG_CHECKING(for FAM)
-AC_ARG_WITH(fam, AC_HELP_STRING([--with-fam],[fam/gamin for reducing number of stat() calls]),
-[WITH_FAM=$withval],[WITH_FAM=no])
-AC_MSG_RESULT([$WITH_FAM])
-
-if test "$WITH_FAM" != "no"; then
-  AC_CHECK_LIB(fam, FAMOpen2, [
-    AC_CHECK_HEADERS([fam.h],[
-      FAM_LIBS=-lfam
-      AC_DEFINE([HAVE_LIBFAM], [1], [libfam])
-      AC_DEFINE([HAVE_FAM_H], [1], [fam.h])
-    ])
-  ])
-  if test "x$FAM_LIBS" = x; then
-    PKG_CHECK_MODULES(FAM, gamin >= 0.1.0, [
-      AC_DEFINE([HAVE_LIBFAM], [1], [libfam])
-      AC_DEFINE([HAVE_FAM_H], [1], [fam.h])
-    ])
-  fi
-  OLD_LIBS=$LIBS
-  LIBS=$FAM_LIBS
-  AC_CHECK_FUNCS([FAMNoExists])
-  LIBS=$OLD_LIBS
-  
-  if test x$FAM_LIBS = x; then
-     AC_MSG_ERROR([fam/gamin-headers and/or libs where not found, install them or build with --without-fam])
-  fi
 fi
 
 AC_MSG_CHECKING(for properties in mod_webdav)
@@ -364,15 +374,14 @@ if test "$WITH_WEBDAV_PROPS" != "no"; then
  if test "$WITH_WEBDAV_LOCKS" != "no"; then
    AC_CHECK_LIB(uuid, uuid_unparse, [
          AC_CHECK_HEADERS([uuid/uuid.h],[
-                 UUID_LIBS=-luuid
+                 UUID_LIB=-luuid
                  AC_DEFINE([HAVE_UUID], [1], [libuuid])
 		 AC_DEFINE([HAVE_UUID_H], [1], [uuid/uuid.h is available])
          ])
- ])
-
+   ])
+   AC_SUBST(UUID_LIB)
  fi
 fi
-AC_SUBST(UUID_LIBS)
 
 dnl Check for gdbm
 AC_MSG_CHECKING(for gdbm)
@@ -406,37 +415,40 @@ if test "$WITH_MEMCACHE" != "no"; then
  ])
  AC_SUBST(MEMCACHE_LIB)
 fi
-
+  
 dnl Check for lua
-AC_MSG_CHECKING(if lua-support is requested)
-AC_ARG_WITH(lua, AC_HELP_STRING([--with-lua],[lua engine for mod_cml]),
+AC_MSG_CHECKING(for lua)
+AC_ARG_WITH(lua, AC_HELP_STRING([--with-lua],[lua engine for mod_magnet]),
 [WITH_LUA=$withval],[WITH_LUA=no])
 
 AC_MSG_RESULT($WITH_LUA)
 if test "$WITH_LUA" != "no"; then
+ # try pkgconfig
  if test "$WITH_LUA" = "yes"; then
-  WITH_LUA=lua
- fi
- PKG_CHECK_MODULES(LUA, $WITH_LUA >= 5.1, [
+    LUAPC=lua
+  else
+    LUAPC=$WITH_LUA
+  fi
+
+ PKG_CHECK_MODULES(LUA, $LUAPC >= 5.1, [
    AC_DEFINE([HAVE_LUA], [1], [liblua])
    AC_DEFINE([HAVE_LUA_H], [1], [lua.h])
  ],[
- dnl for debian based systems
- PKG_CHECK_MODULES(LUA, lua5.1 >= 5.1, [
-   AC_DEFINE([HAVE_LUA], [1], [liblua])
-   AC_DEFINE([HAVE_LUA_H], [1], [lua.h])
- ],[
- dnl for freebsd
- PKG_CHECK_MODULES(LUA, lua-5.1 >= 5.1, [
-   AC_DEFINE([HAVE_LUA], [1], [liblua])
-   AC_DEFINE([HAVE_LUA_H], [1], [lua.h])
- ])
- ])
+   # for debian based systems
+   PKG_CHECK_MODULES(LUA, lua5.1 >= 5.1, [
+     AC_DEFINE([HAVE_LUA], [1], [liblua])
+     AC_DEFINE([HAVE_LUA_H], [1], [lua.h])
+   ])
  ])
 
  AC_SUBST(LUA_CFLAGS)
  AC_SUBST(LUA_LIBS)
 fi
+
+PKG_CHECK_MODULES(GTHREAD, gthread-2.0 >= 2.4.0, [
+  AC_DEFINE([HAVE_GTHREAD], [1], [libglib])
+  AC_DEFINE([HAVE_GLIB_H], [1], [glib.h])
+])
 
 save_LIBS=$LIBS
 AC_SEARCH_LIBS(crypt,crypt,[
@@ -468,8 +480,8 @@ case $host_os in
 esac
 
 AC_CHECK_FUNCS([dup2 getcwd inet_ntoa inet_ntop memset mmap munmap strchr \
-		  strdup strerror strstr strtol sendfile  getopt socket lstat \
-		  gethostbyname poll sigtimedwait epoll_ctl getrlimit chroot \
+		  strdup strerror strstr strtol strtoll sendfile  getopt socket lstat \
+		  gethostbyname poll sigtimedwait epoll_ctl getrlimit chroot strptime \
 		  getuid select signal pathconf madvise posix_fadvise posix_madvise \
 		  writev sigaction sendfile64 send_file kqueue port_create localtime_r gmtime_r])
 
@@ -488,7 +500,7 @@ AC_CHECK_SIZEOF(long)
 AC_CHECK_SIZEOF(off_t)
 
 if test "x$ac_cv_func_sendfile" = xyes; then
-	dnl check if sendfile works
+	# check if sendfile works
         AC_MSG_CHECKING(if sendfile works)
 	if test "x$cross_compiling" = xno; then
 	AC_TRY_RUN([
@@ -500,13 +512,13 @@ if test "x$ac_cv_func_sendfile" = xyes; then
 		      int o = 0;
 		      if (-1 == sendfile(-1, 0, &o, 0) && errno == ENOSYS) return -1;
 		      return 0;
-		    } ],
-		    AC_MSG_RESULT(yes),
-		    [ AC_MSG_RESULT(no)
+		    } ], 
+		    AC_MSG_RESULT(yes), 
+		    [ AC_MSG_RESULT(no) 
 		    AC_DEFINE([HAVE_SENDFILE_BROKEN], [1], [broken sendfile]) ] )
 	else
-	      AC_MSG_RESULT(no, cross-compiling)
-	      AC_DEFINE([HAVE_SENDFILE_BROKEN], [1], [broken sendfile])
+	      AC_MSG_RESULT(no, cross-compiling) 
+	      AC_DEFINE([HAVE_SENDFILE_BROKEN], [1], [broken sendfile]) 
 	fi
 fi
 
@@ -526,7 +538,7 @@ if test x$ipv6 = xtrue; then
 #include <sys/socket.h>
 #include <netinet/in.h>], [struct sockaddr_in6 s; struct in6_addr t=in6addr_any; int i=AF_INET6; s; t.s6_addr[0] = 0; ],
   [ac_cv_ipv6_support=yes], [ac_cv_ipv6_support=no])])
-
+  
   if test "$ac_cv_ipv6_support" = yes; then
     AC_DEFINE(HAVE_IPV6,1,[Whether to enable IPv6 support])
   fi
@@ -538,15 +550,20 @@ AM_CONDITIONAL(CROSS_COMPILING, test "x$cross_compiling" = xyes)
 dnl check for fastcgi lib, for the tests only
 fastcgi_found=no
 AC_CHECK_LIB(fcgi, FCGI_Accept, [
- AC_CHECK_HEADERS([fastcgi.h fastcgi/fastcgi.h],[
+ AC_CHECK_HEADERS([fastcgi.h],[
    fastcgi_found=yes
+   AC_DEFINE(HAVE_FASTCGI_H, 1, [ fastcgi.h ])
+ ],[
+   AC_CHECK_HEADERS([fastcgi/fastcgi.h],[
+     fastcgi_found=yes
+     AC_DEFINE(HAVE_FASTCGI_FASTCGI_H, 1, [fastcgi/fastcgi.h])
+   ])
  ])
 ])
 
-AM_CONDITIONAL(CHECK_WITH_FASTCGI, test "x$fastcgi_found" = xyes)
+AM_CONDITIONAL(CHECK_WITH_FASTCGI, [test "x$fastcgi_found" = xyes])
 
-
-dnl check for extra compiler options (warning options)
+# check for extra compiler options (warning options)
 if test "${GCC}" = "yes"; then
     CFLAGS="${CFLAGS} -Wall -W -Wshadow -pedantic -std=gnu99"
 fi
@@ -565,7 +582,7 @@ fi
 
 dnl build version-id
 LIGHTTPD_VERSION_ID=`echo $PACKAGE_VERSION | $AWK -F '.' '{print "(" $1 " << 16 | " $2 " << 8 | " $3 ")"}'`
-AC_DEFINE_UNQUOTED([LIGHTTPD_VERSION_ID], [$LIGHTTPD_VERSION_ID], [lighttpd-version-id])
+AC_DEFINE_UNQUOTED([LIGHTTPD_VERSION_ID], [$LIGHTTPD_VERSION_ID], [lighttpd-version-id]) 
 
 AC_CONFIG_FILES([Makefile src/Makefile doc/Makefile tests/Makefile \
 		 tests/docroot/Makefile \
@@ -574,12 +591,44 @@ AC_CONFIG_FILES([Makefile src/Makefile doc/Makefile tests/Makefile \
 		 tests/docroot/www/go/Makefile \
 		 tests/docroot/www/indexfile/Makefile \
 		 tests/docroot/www/expire/Makefile \
+		 src/valgrind/Makefile \
 		 distribute.sh])
 AC_OUTPUT
 
 
-do_build="mod_cgi mod_fastcgi mod_extforward mod_proxy mod_evhost mod_simple_vhost mod_access mod_alias mod_setenv mod_usertrack mod_auth mod_status mod_accesslog"
-do_build="$do_build mod_rrdtool mod_secdownload mod_expire mod_compress mod_dirlisting mod_indexfile mod_userdir mod_webdav mod_staticfile mod_scgi mod_flv_streaming"
+do_build="\
+	mod_access \
+	mod_accesslog \
+	mod_alias \
+	mod_auth \
+	mod_cgi \
+	mod_chunked \
+	mod_compress \
+	mod_deflate \
+	mod_dirlisting \
+	mod_evhost \
+	mod_evasive \
+	mod_expire \
+	mod_flv_streaming\
+	mod_indexfile \
+	mod_proxy_core \
+	mod_proxy_backend_http \
+	mod_proxy_backend_fastcgi \
+	mod_proxy_backend_scgi \
+	mod_proxy_backend_ajp13 \
+	mod_rrdtool \
+	mod_secdownload \
+	mod_setenv \
+	mod_simple_vhost \
+	mod_sql_vhost_core \
+	mod_ssi \
+	mod_staticfile \
+	mod_status \
+	mod_uploadprogress \
+	mod_userdir \
+	mod_usertrack \
+	mod_webdav \
+	" 
 
 plugins="mod_rewrite mod_redirect mod_ssi mod_trigger_b4_dl"
 features="regex-conditionals"
@@ -598,7 +647,14 @@ else
 	no_build="$no_build $plugins"
 fi
 
-plugins="mod_cml mod_magnet"
+plugins="mod_postgresql_vhost"
+if test ! "x$POSTGRESQL_LIBS" = x; then
+        do_build="$do_build $plugins"
+else
+        no_build="$no_build $plugins"
+fi
+
+plugins="mod_magnet"
 if test ! "x$LUA_LIBS" = x; then
 	do_build="$do_build $plugins"
 else
@@ -647,7 +703,7 @@ else
 	disable_feature="$disable_feature $features"
 fi
 
-dnl no crypt call
+# no crypt call
 features="auth-crypt"
 if test "$ac_cv_search_crypt" = no; then
 	disable_feature="$disable_feature $features"
@@ -669,13 +725,6 @@ else
 	disable_feature="$disable_feature $features"
 fi
 
-features="stat-cache-fam"
-if test ! "x$FAM_LIBS" = x; then
-	enable_feature="$enable_feature $features"
-else
-	disable_feature="$disable_feature $features"
-fi
-
 features="webdav-properties"
 if test "x$XML_LIBS" \!= x -a "x$SQLITE_LIBS" \!= x; then
 	enable_feature="$enable_feature $features"
@@ -684,14 +733,13 @@ else
 fi
 
 features="webdav-locks"
-if test "x$UUID_LIBS" \!= x; then
+if test "x$UUID_LIB" \!= x; then
 	enable_feature="$enable_feature $features"
 else
 	disable_feature="$disable_feature $features"
 fi
 
-
-dnl output
+## output
 
 $ECHO
 $ECHO "Plugins:"

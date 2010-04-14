@@ -1,17 +1,18 @@
-#include "plugin.h"
-#include "log.h"
-
 #include <string.h>
 #include <stdlib.h>
 
 #include <stdio.h>
 
-#ifdef HAVE_VALGRIND_VALGRIND_H
-# include <valgrind/valgrind.h>
+#include "plugin.h"
+#include "log.h"
+#ifdef HAVE_CONFIG_H
+#include "config.h"
 #endif
 
-#ifndef __WIN32
-# include <dlfcn.h>
+#include "sys-files.h"
+
+#ifndef _WIN32
+#include <dlfcn.h>
 #endif
 /*
  *
@@ -31,12 +32,15 @@ typedef enum {
 	PLUGIN_FUNC_UNSET,
 		PLUGIN_FUNC_HANDLE_URI_CLEAN,
 		PLUGIN_FUNC_HANDLE_URI_RAW,
-		PLUGIN_FUNC_HANDLE_REQUEST_DONE,
+		PLUGIN_FUNC_HANDLE_RESPONSE_DONE,
 		PLUGIN_FUNC_HANDLE_CONNECTION_CLOSE,
 		PLUGIN_FUNC_HANDLE_TRIGGER,
 		PLUGIN_FUNC_HANDLE_SIGHUP,
-		PLUGIN_FUNC_HANDLE_SUBREQUEST,
-		PLUGIN_FUNC_HANDLE_SUBREQUEST_START,
+		PLUGIN_FUNC_HANDLE_START_BACKEND,
+		PLUGIN_FUNC_HANDLE_SEND_REQUEST_CONTENT,
+		PLUGIN_FUNC_HANDLE_RESPONSE_HEADER,
+		PLUGIN_FUNC_HANDLE_READ_RESPONSE_CONTENT,
+		PLUGIN_FUNC_HANDLE_FILTER_RESPONSE_CONTENT,
 		PLUGIN_FUNC_HANDLE_JOBLIST,
 		PLUGIN_FUNC_HANDLE_DOCROOT,
 		PLUGIN_FUNC_HANDLE_PHYSICAL,
@@ -53,19 +57,25 @@ static plugin *plugin_init(void) {
 
 	p = calloc(1, sizeof(*p));
 
+	p->required_plugins = array_init();
+
 	return p;
 }
 
 static void plugin_free(plugin *p) {
 	int use_dlclose = 1;
+
 	if (p->name) buffer_free(p->name);
-#ifdef HAVE_VALGRIND_VALGRIND_H
-	/*if (RUNNING_ON_VALGRIND) use_dlclose = 0;*/
-#endif
+
+	array_free(p->required_plugins);
+
+	/* if we are running under valgrind, 
+	 * don't unload the plugins to keep the symbols intact */
+	if (RUNNING_ON_VALGRIND) use_dlclose = 0;
 
 #ifndef LIGHTTPD_STATIC
 	if (use_dlclose && p->lib) {
-#ifdef __WIN32
+#ifdef _WIN32
 		FreeLibrary(p->lib);
 #else
 		dlclose(p->lib);
@@ -100,44 +110,136 @@ static int plugins_register(server *srv, plugin *p) {
  */
 
 #ifdef LIGHTTPD_STATIC
-int plugins_load(server *srv) {
-	plugin *p;
-#define PLUGIN_INIT(x)\
-	p = plugin_init(); \
-	if (x ## _plugin_init(p)) { \
-		log_error_write(srv, __FILE__, __LINE__, "ss", #x, "plugin init failed" ); \
-		plugin_free(p); \
-		return -1;\
-	}\
-	plugins_register(srv, p);
 
-#include "plugin-static.h"
+#define PLUGIN_STATIC(x) int x ## _plugin_init(plugin *p)
 
-	return 0;
-}
-#else
+PLUGIN_STATIC(mod_access);
+PLUGIN_STATIC(mod_accesslog);
+PLUGIN_STATIC(mod_alias);
+PLUGIN_STATIC(mod_auth);
+PLUGIN_STATIC(mod_cgi);
+PLUGIN_STATIC(mod_dirlisting);
+PLUGIN_STATIC(mod_evasive);
+PLUGIN_STATIC(mod_evhost);
+PLUGIN_STATIC(mod_expire);
+PLUGIN_STATIC(mod_deflate);
+PLUGIN_STATIC(mod_compress);
+PLUGIN_STATIC(mod_flv_streaming);
+PLUGIN_STATIC(mod_chunked);
+PLUGIN_STATIC(mod_indexfile);
+PLUGIN_STATIC(mod_mysql_vhost);
+PLUGIN_STATIC(mod_postgresql_vhost);
+PLUGIN_STATIC(mod_proxy_backend_ajp13);
+PLUGIN_STATIC(mod_proxy_backend_fastcgi);
+PLUGIN_STATIC(mod_proxy_backend_http);
+PLUGIN_STATIC(mod_proxy_backend_scgi);
+PLUGIN_STATIC(mod_proxy_core);
+PLUGIN_STATIC(mod_redirect);
+PLUGIN_STATIC(mod_rewrite);
+PLUGIN_STATIC(mod_secdownload);
+PLUGIN_STATIC(mod_setenv);
+PLUGIN_STATIC(mod_simple_vhost);
+PLUGIN_STATIC(mod_sql_vhost_core);
+PLUGIN_STATIC(mod_ssi);
+PLUGIN_STATIC(mod_staticfile);
+PLUGIN_STATIC(mod_status);
+PLUGIN_STATIC(mod_trigger_b4_dl);
+PLUGIN_STATIC(mod_uploadprogress);
+PLUGIN_STATIC(mod_userdir);
+PLUGIN_STATIC(mod_usertrack);
+PLUGIN_STATIC(mod_webdav);
+PLUGIN_STATIC(mod_magnet);
+
+#undef PLUGIN_STATIC
+
+#define PLUGIN_STATIC(x) { #x, x ## _plugin_init }
+
+struct {
+	const char *name;
+	int (*init)(plugin *pl);
+} const static_plugins[] = {
+PLUGIN_STATIC(mod_access),
+PLUGIN_STATIC(mod_accesslog),
+PLUGIN_STATIC(mod_alias),
+PLUGIN_STATIC(mod_auth),
+PLUGIN_STATIC(mod_cgi),
+PLUGIN_STATIC(mod_dirlisting),
+PLUGIN_STATIC(mod_evasive),
+PLUGIN_STATIC(mod_evhost),
+PLUGIN_STATIC(mod_expire),
+PLUGIN_STATIC(mod_deflate),
+PLUGIN_STATIC(mod_compress),
+PLUGIN_STATIC(mod_flv_streaming),
+PLUGIN_STATIC(mod_chunked),
+PLUGIN_STATIC(mod_indexfile),
+PLUGIN_STATIC(mod_mysql_vhost),
+PLUGIN_STATIC(mod_postgresql_vhost),
+PLUGIN_STATIC(mod_proxy_backend_ajp13),
+PLUGIN_STATIC(mod_proxy_backend_fastcgi),
+PLUGIN_STATIC(mod_proxy_backend_http),
+PLUGIN_STATIC(mod_proxy_backend_scgi),
+PLUGIN_STATIC(mod_proxy_core),
+PLUGIN_STATIC(mod_redirect),
+PLUGIN_STATIC(mod_rewrite),
+PLUGIN_STATIC(mod_secdownload),
+PLUGIN_STATIC(mod_setenv),
+PLUGIN_STATIC(mod_simple_vhost),
+PLUGIN_STATIC(mod_sql_vhost_core),
+PLUGIN_STATIC(mod_ssi),
+PLUGIN_STATIC(mod_staticfile),
+PLUGIN_STATIC(mod_status),
+PLUGIN_STATIC(mod_trigger_b4_dl),
+PLUGIN_STATIC(mod_uploadprogress),
+PLUGIN_STATIC(mod_userdir),
+PLUGIN_STATIC(mod_usertrack),
+PLUGIN_STATIC(mod_webdav),
+PLUGIN_STATIC(mod_magnet),
+
+	{ NULL, NULL }
+};
+
+#undef PLUGIN_STATIC
+
+#endif
+
 int plugins_load(server *srv) {
 	plugin *p;
 	int (*init)(plugin *pl);
+
 	const char *error;
-	size_t i;
+	size_t i, j, k;
 
 	for (i = 0; i < srv->srvconf.modules->used; i++) {
 		data_string *d = (data_string *)srv->srvconf.modules->data[i];
 		char *modules = d->value->ptr;
 
+		p = plugin_init();
+
+#ifdef LIGHTTPD_STATIC
+		for (j = 0; static_plugins[j].name; j++) {
+			if (0 == strcmp(BUF_STR(d->value), static_plugins[j].name)) {
+				init = static_plugins[j].init;
+
+				break;
+			}
+		}
+
+		if (static_plugins[j].name == NULL) {
+			ERROR("the plugin '%s' is not compiled in", SAFE_BUF_STR(d->value));
+			return -1;
+		}
+#else
 		buffer_copy_string_buffer(srv->tmp_buf, srv->srvconf.modules_dir);
 
-		buffer_append_string_len(srv->tmp_buf, CONST_STR_LEN("/"));
+		if (strlen(srv->srvconf.modules_dir->ptr) != 0) buffer_append_string(srv->tmp_buf, DIR_SEPERATOR_STR);
 		buffer_append_string(srv->tmp_buf, modules);
-#if defined(__WIN32) || defined(__CYGWIN__)
+#if defined(_WIN32) || defined(__CYGWIN__)
 		buffer_append_string_len(srv->tmp_buf, CONST_STR_LEN(".dll"));
 #else
 		buffer_append_string_len(srv->tmp_buf, CONST_STR_LEN(".so"));
 #endif
 
-		p = plugin_init();
-#ifdef __WIN32
+#ifdef _WIN32
 		if (NULL == (p->lib = LoadLibrary(srv->tmp_buf->ptr))) {
 			LPVOID lpMsgBuf;
 			FormatMessage(
@@ -172,8 +274,8 @@ int plugins_load(server *srv) {
 		buffer_copy_string(srv->tmp_buf, modules);
 		buffer_append_string_len(srv->tmp_buf, CONST_STR_LEN("_plugin_init"));
 
-#ifdef __WIN32
-		init = GetProcAddress(p->lib, srv->tmp_buf->ptr);
+#ifdef _WIN32
+		init = (int (*)(plugin *pl)) GetProcAddress(p->lib, srv->tmp_buf->ptr);
 
 		if (init == NULL)  {
 			LPVOID lpMsgBuf;
@@ -199,28 +301,45 @@ int plugins_load(server *srv) {
 		*(void **)(&init) = dlsym(p->lib, srv->tmp_buf->ptr);
 #endif
 		if ((error = dlerror()) != NULL)  {
-			log_error_write(srv, __FILE__, __LINE__, "s", error);
+			ERROR("dlsym(%s) failed: %s", SAFE_BUF_STR(srv->tmp_buf), error);
 
 			plugin_free(p);
 			return -1;
 		}
 
+#endif
 #endif
 		if ((*init)(p)) {
-			log_error_write(srv, __FILE__, __LINE__, "ss", modules, "plugin init failed" );
+			ERROR("plugin-init failed for %s", SAFE_BUF_STR(d->value));
 
 			plugin_free(p);
 			return -1;
 		}
-#if 0
-		log_error_write(srv, __FILE__, __LINE__, "ss", modules, "plugin loaded" );
-#endif
+
+		/* check if the required plugin is loaded */
+		for (k = 0; k < p->required_plugins->used; k++) {
+			data_string *req = (data_string *)p->required_plugins->data[k];
+
+			for (j = 0; j < i; j++) {
+				data_string *mod = (data_string *)srv->srvconf.modules->data[j];
+
+				if (buffer_is_equal(req->value, mod->value)) break;
+			}
+
+			if (j == i) {
+				/* not found */
+				log_error_write(srv, __FILE__, __LINE__, "ssbs", modules, "failed to load. required plugin", req->value, "was not loaded" );
+
+				plugin_free(p);
+
+				return -1;
+			}
+		}
 		plugins_register(srv, p);
 	}
 
 	return 0;
 }
-#endif
 
 #define PLUGIN_TO_SLOT(x, y) \
 	handler_t plugins_call_##y(server *srv, connection *con) {\
@@ -240,9 +359,10 @@ int plugins_load(server *srv) {
 			case HANDLER_WAIT_FOR_EVENT:\
 			case HANDLER_WAIT_FOR_FD:\
 			case HANDLER_ERROR:\
+				if (con->conf.log_request_handling) TRACE("-- plugins_call_...: plugin '%s' returns %d", SAFE_BUF_STR(p->name), r); \
 				return r;\
 			default:\
-				log_error_write(srv, __FILE__, __LINE__, "sbs", #x, p->name, "unknown state");\
+				ERROR("-- plugins_call_...: plugin '%s' returns %d (unexpected)", SAFE_BUF_STR(p->name), r); \
 				return HANDLER_ERROR;\
 			}\
 		}\
@@ -259,13 +379,16 @@ int plugins_load(server *srv) {
 
 PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_URI_CLEAN, handle_uri_clean)
 PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_URI_RAW, handle_uri_raw)
-PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_REQUEST_DONE, handle_request_done)
-PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_CONNECTION_CLOSE, handle_connection_close)
-PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_SUBREQUEST, handle_subrequest)
-PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_SUBREQUEST_START, handle_subrequest_start)
-PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_JOBLIST, handle_joblist)
 PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_DOCROOT, handle_docroot)
 PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_PHYSICAL, handle_physical)
+PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_START_BACKEND, handle_start_backend)
+PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_SEND_REQUEST_CONTENT, handle_send_request_content)
+PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_RESPONSE_HEADER, handle_response_header)
+PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_READ_RESPONSE_CONTENT, handle_read_response_content)
+PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_FILTER_RESPONSE_CONTENT, handle_filter_response_content)
+PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_CONNECTION_CLOSE, handle_connection_close)
+PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_RESPONSE_DONE, handle_response_done)
+PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_JOBLIST, handle_joblist)
 PLUGIN_TO_SLOT(PLUGIN_FUNC_CONNECTION_RESET, connection_reset)
 
 #undef PLUGIN_TO_SLOT
@@ -386,22 +509,26 @@ handler_t plugins_call_init(server *srv) {
 
 		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_URI_CLEAN, handle_uri_clean);
 		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_URI_RAW, handle_uri_raw);
-		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_REQUEST_DONE, handle_request_done);
-		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_CONNECTION_CLOSE, handle_connection_close);
-		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_TRIGGER, handle_trigger);
-		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_SIGHUP, handle_sighup);
-		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_SUBREQUEST, handle_subrequest);
-		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_SUBREQUEST_START, handle_subrequest_start);
-		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_JOBLIST, handle_joblist);
 		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_DOCROOT, handle_docroot);
 		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_PHYSICAL, handle_physical);
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_START_BACKEND, handle_start_backend);
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_SEND_REQUEST_CONTENT, handle_send_request_content);
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_RESPONSE_HEADER, handle_response_header);
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_READ_RESPONSE_CONTENT, handle_read_response_content);
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_FILTER_RESPONSE_CONTENT, handle_filter_response_content)
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_RESPONSE_DONE, handle_response_done);
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_CONNECTION_CLOSE, handle_connection_close);
+
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_JOBLIST, handle_joblist);
 		PLUGIN_TO_SLOT(PLUGIN_FUNC_CONNECTION_RESET, connection_reset);
 		PLUGIN_TO_SLOT(PLUGIN_FUNC_CLEANUP, cleanup);
 		PLUGIN_TO_SLOT(PLUGIN_FUNC_SET_DEFAULTS, set_defaults);
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_TRIGGER, handle_trigger);
+		PLUGIN_TO_SLOT(PLUGIN_FUNC_HANDLE_SIGHUP, handle_sighup);
 #undef PLUGIN_TO_SLOT
 
 		if (p->init) {
-			if (NULL == (p->data = p->init())) {
+			if (NULL == (p->data = p->init(srv))) {
 				log_error_write(srv, __FILE__, __LINE__, "sb",
 						"plugin-init failed for module", p->name);
 				return HANDLER_ERROR;
@@ -421,6 +548,23 @@ handler_t plugins_call_init(server *srv) {
 	}
 
 	return HANDLER_GO_ON;
+}
+
+/**
+ * get the config-storage of the named plugin
+ */
+void *plugin_get_config(server *srv, const char *name) {
+	size_t i;
+
+	for (i = 0; i < srv->plugins.used; i++) {
+		plugin *p = ((plugin **)srv->plugins.ptr)[i];
+
+		if (buffer_is_equal_string(p->name, name, strlen(name))) {
+			return p->data;
+		}
+	}
+
+	return NULL;
 }
 
 void plugins_free(server *srv) {

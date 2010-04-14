@@ -1,12 +1,15 @@
-#include "stream.h"
-
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#include <unistd.h>
 #include <fcntl.h>
 
+#include "stream.h"
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include "sys-mmap.h"
+#include "sys-files.h"
 
 #ifndef O_BINARY
 # define O_BINARY 0
@@ -16,7 +19,7 @@ int stream_open(stream *f, buffer *fn) {
 	struct stat st;
 #ifdef HAVE_MMAP
 	int fd;
-#elif defined __WIN32
+#elif defined _WIN32
 	HANDLE *fh, *mh;
 	void *p;
 #endif
@@ -42,7 +45,7 @@ int stream_open(stream *f, buffer *fn) {
 		return -1;
 	}
 
-#elif defined __WIN32
+#elif defined _WIN32
 	fh = CreateFile(fn->ptr,
 			GENERIC_READ,
 			FILE_SHARE_READ,
@@ -51,7 +54,7 @@ int stream_open(stream *f, buffer *fn) {
 			FILE_ATTRIBUTE_READONLY,
 			NULL);
 
-	if (!fh) return -1;
+	if (fh == INVALID_HANDLE_VALUE) return -1;
 
 	mh = CreateFileMapping( fh,
 			NULL,

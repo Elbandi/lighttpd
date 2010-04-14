@@ -1,3 +1,7 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -6,21 +10,16 @@
 #include "response.h"
 #include "inet_ntop_cache.h"
 
-#include <ctype.h>
-#include <stdlib.h>
-#include <fcntl.h>
-#include <string.h>
-
 #if defined(HAVE_GDBM_H)
-# include <gdbm.h>
+#include <gdbm.h>
 #endif
 
 #if defined(HAVE_PCRE_H)
-# include <pcre.h>
+#include <pcre.h>
 #endif
 
 #if defined(HAVE_MEMCACHE_H)
-# include <memcache.h>
+#include <memcache.h>
 #endif
 
 /**
@@ -68,6 +67,8 @@ typedef struct {
 /* init the plugin data */
 INIT_FUNC(mod_trigger_b4_dl_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -181,9 +182,6 @@ SETDEFAULTS_FUNC(mod_trigger_b4_dl_set_defaults) {
 						"gdbm-open failed");
 				return HANDLER_ERROR;
 			}
-#ifdef FD_CLOEXEC
-			fcntl(gdbm_fdesc(s->db), F_SETFD, FD_CLOEXEC);
-#endif
 		}
 #endif
 #if defined(HAVE_PCRE_H)
@@ -245,25 +243,23 @@ SETDEFAULTS_FUNC(mod_trigger_b4_dl_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_trigger_b4_dl_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
 #if defined(HAVE_GDBM)
-	PATCH(db);
+	PATCH_OPTION(db);
 #endif
 #if defined(HAVE_PCRE_H)
-	PATCH(download_regex);
-	PATCH(trigger_regex);
+	PATCH_OPTION(download_regex);
+	PATCH_OPTION(trigger_regex);
 #endif
-	PATCH(trigger_timeout);
-	PATCH(deny_url);
-	PATCH(mc_namespace);
-	PATCH(debug);
+	PATCH_OPTION(trigger_timeout);
+	PATCH_OPTION(deny_url);
+	PATCH_OPTION(mc_namespace);
+	PATCH_OPTION(debug);
 #if defined(HAVE_MEMCACHE_H)
-	PATCH(mc);
+	PATCH_OPTION(mc);
 #endif
 
 	/* skip the first, the global context */
@@ -280,27 +276,27 @@ static int mod_trigger_b4_dl_patch_connection(server *srv, connection *con, plug
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("trigger-before-download.download-url"))) {
 #if defined(HAVE_PCRE_H)
-				PATCH(download_regex);
+				PATCH_OPTION(download_regex);
 #endif
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("trigger-before-download.trigger-url"))) {
 # if defined(HAVE_PCRE_H)
-				PATCH(trigger_regex);
+				PATCH_OPTION(trigger_regex);
 # endif
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("trigger-before-download.gdbm-filename"))) {
 #if defined(HAVE_GDBM_H)
-				PATCH(db);
+				PATCH_OPTION(db);
 #endif
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("trigger-before-download.trigger-timeout"))) {
-				PATCH(trigger_timeout);
+				PATCH_OPTION(trigger_timeout);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("trigger-before-download.debug"))) {
-				PATCH(debug);
+				PATCH_OPTION(debug);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("trigger-before-download.deny-url"))) {
-				PATCH(deny_url);
+				PATCH_OPTION(deny_url);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("trigger-before-download.memcache-namespace"))) {
-				PATCH(mc_namespace);
+				PATCH_OPTION(mc_namespace);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("trigger-before-download.memcache-hosts"))) {
 #if defined(HAVE_MEMCACHE_H)
-				PATCH(mc);
+				PATCH_OPTION(mc);
 #endif
 			}
 		}
@@ -308,7 +304,6 @@ static int mod_trigger_b4_dl_patch_connection(server *srv, connection *con, plug
 
 	return 0;
 }
-#undef PATCH
 
 URIHANDLER_FUNC(mod_trigger_b4_dl_uri_handler) {
 	plugin_data *p = p_d;
@@ -319,8 +314,6 @@ URIHANDLER_FUNC(mod_trigger_b4_dl_uri_handler) {
 	int n;
 # define N 10
 	int ovec[N * 3];
-
-	if (con->mode != DIRECT) return HANDLER_GO_ON;
 
 	if (con->uri.path->used == 0) return HANDLER_GO_ON;
 
@@ -343,7 +336,7 @@ URIHANDLER_FUNC(mod_trigger_b4_dl_uri_handler) {
 	if (!p->conf.mc) return HANDLER_GO_ON;
 # endif
 
-	if (NULL != (ds = (data_string *)array_get_element(con->request.headers, "X-Forwarded-For"))) {
+	if (NULL != (ds = (data_string *)array_get_element(con->request.headers, CONST_STR_LEN("X-Forwarded-For")))) {
 		/* X-Forwarded-For contains the ip behind the proxy */
 
 		remote_ip = ds->value->ptr;
@@ -431,8 +424,9 @@ URIHANDLER_FUNC(mod_trigger_b4_dl_uri_handler) {
 				/* not found, redirect */
 
 				response_header_insert(srv, con, CONST_STR_LEN("Location"), CONST_BUF_LEN(p->conf.deny_url));
+
 				con->http_status = 307;
-				con->file_finished = 1;
+				con->send->is_closed = 1;
 
 				return HANDLER_FINISHED;
 			}
@@ -446,7 +440,7 @@ URIHANDLER_FUNC(mod_trigger_b4_dl_uri_handler) {
 
 				response_header_insert(srv, con, CONST_STR_LEN("Location"), CONST_BUF_LEN(p->conf.deny_url));
 				con->http_status = 307;
-				con->file_finished = 1;
+				con->send->is_closed = 1;
 
 				if (p->conf.db) {
 					if (0 != gdbm_delete(p->conf.db, key)) {
@@ -497,7 +491,7 @@ URIHANDLER_FUNC(mod_trigger_b4_dl_uri_handler) {
 				response_header_insert(srv, con, CONST_STR_LEN("Location"), CONST_BUF_LEN(p->conf.deny_url));
 
 				con->http_status = 307;
-				con->file_finished = 1;
+				con->send->is_closed = 1;
 
 				return HANDLER_FINISHED;
 			}
@@ -576,8 +570,8 @@ TRIGGER_FUNC(mod_trigger_b4_dl_handle_trigger) {
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_trigger_b4_dl_plugin_init(plugin *p);
-int mod_trigger_b4_dl_plugin_init(plugin *p) {
+LI_EXPORT int mod_trigger_b4_dl_plugin_init(plugin *p);
+LI_EXPORT int mod_trigger_b4_dl_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("trigger_b4_dl");
 

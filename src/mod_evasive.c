@@ -1,3 +1,7 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -5,10 +9,6 @@
 #include "plugin.h"
 
 #include "inet_ntop_cache.h"
-
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
 
 /**
  * mod_evasive
@@ -27,7 +27,6 @@
 
 typedef struct {
 	unsigned short max_conns;
-	unsigned short silent;
 } plugin_config;
 
 typedef struct {
@@ -40,6 +39,8 @@ typedef struct {
 
 INIT_FUNC(mod_evasive_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -73,8 +74,7 @@ SETDEFAULTS_FUNC(mod_evasive_set_defaults) {
 	size_t i = 0;
 
 	config_values_t cv[] = {
-		{ "evasive.max-conns-per-ip",    NULL, T_CONFIG_SHORT, T_CONFIG_SCOPE_CONNECTION },   /* 0 */
-		{ "evasive.silent",              NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION }, /* 1 */
+		{ "evasive.max-conns-per-ip",    NULL, T_CONFIG_SHORT, T_CONFIG_SCOPE_CONNECTION },
 		{ NULL,                          NULL, T_CONFIG_UNSET, T_CONFIG_SCOPE_UNSET }
 	};
 
@@ -85,10 +85,8 @@ SETDEFAULTS_FUNC(mod_evasive_set_defaults) {
 
 		s = calloc(1, sizeof(plugin_config));
 		s->max_conns       = 0;
-		s->silent          = 0;
 
 		cv[0].destination = &(s->max_conns);
-		cv[1].destination = &(s->silent);
 
 		p->config_storage[i] = s;
 
@@ -100,14 +98,11 @@ SETDEFAULTS_FUNC(mod_evasive_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_evasive_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(max_conns);
-	PATCH(silent);
+	PATCH_OPTION(max_conns);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -122,16 +117,13 @@ static int mod_evasive_patch_connection(server *srv, connection *con, plugin_dat
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("evasive.max-conns-per-ip"))) {
-				PATCH(max_conns);
-			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("evasive.silent"))) {
-				PATCH(silent);
+				PATCH_OPTION(max_conns);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 URIHANDLER_FUNC(mod_evasive_uri_handler) {
 	plugin_data *p = p_d;
@@ -151,7 +143,7 @@ URIHANDLER_FUNC(mod_evasive_uri_handler) {
 		case AF_INET6:
 #endif
 			break;
-		default: /* Address family not supported */
+		default: // Address family not supported
 			return HANDLER_GO_ON;
 	};
 
@@ -162,7 +154,7 @@ URIHANDLER_FUNC(mod_evasive_uri_handler) {
 		 * we can only ban connections which are already behind the 'read request' state
 		 * */
 		if (c->dst_addr.plain.sa_family != con->dst_addr.plain.sa_family) continue;
-		if (c->state <= CON_STATE_REQUEST_END) continue;
+		if (c->state <= CON_STATE_HANDLE_REQUEST_HEADER) continue;
 
 		switch (con->dst_addr.plain.sa_family) {
 			case AF_INET:
@@ -173,20 +165,17 @@ URIHANDLER_FUNC(mod_evasive_uri_handler) {
 				if (0 != memcmp(c->dst_addr.ipv6.sin6_addr.s6_addr, con->dst_addr.ipv6.sin6_addr.s6_addr, 16)) continue;
 				break;
 #endif
-			default: /* Address family not supported, should never be reached */
+			default: // Address family not supported, should never be reached
 				continue;
 		};
 		conns_by_ip++;
 
 		if (conns_by_ip > p->conf.max_conns) {
-			if (!p->conf.silent) {
-				log_error_write(srv, __FILE__, __LINE__, "ss",
-					inet_ntop_cache_get_ip(srv, &(con->dst_addr)),
-					"turned away. Too many connections.");
-			}
+			log_error_write(srv, __FILE__, __LINE__, "ss",
+				inet_ntop_cache_get_ip(srv, &(con->dst_addr)),
+				"turned away. Too many connections.");
 
 			con->http_status = 403;
-			con->mode = DIRECT;
 			return HANDLER_FINISHED;
 		}
 	}
@@ -195,8 +184,8 @@ URIHANDLER_FUNC(mod_evasive_uri_handler) {
 }
 
 
-int mod_evasive_plugin_init(plugin *p);
-int mod_evasive_plugin_init(plugin *p) {
+LI_EXPORT int mod_evasive_plugin_init(plugin *p);
+LI_EXPORT int mod_evasive_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("evasive");
 

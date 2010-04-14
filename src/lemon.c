@@ -11,19 +11,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#ifdef HAVE_STDINT_H
-# include <stdint.h>
-#endif
-#ifdef HAVE_INTTYPES_H
-# include <inttypes.h>
-#endif
-
-#define UNUSED(x) ( (void)(x) )
+#include <unistd.h>
 
 extern void qsort();
 extern double strtod();
@@ -39,14 +27,8 @@ extern char *getenv();
 #   endif
 #endif
 
-#if __GNUC__ > 2
-#define NORETURN __attribute__ ((__noreturn__))
-#else
-#define NORETURN
-#endif
-
-/* #define PRIVATE static */
 #define PRIVATE static
+/* #define PRIVATE */
 
 #ifdef TEST
 #define MAXRHS 5       /* Set low to exercise exception code */
@@ -57,7 +39,7 @@ extern char *getenv();
 char *msort();
 extern void *malloc();
 
-extern void memory_error() NORETURN;
+extern void memory_error();
 
 /******** From the file "action.h" *************************************/
 struct action *Action_new();
@@ -65,7 +47,7 @@ struct action *Action_sort();
 void Action_add();
 
 /********* From the file "assert.h" ************************************/
-void myassert() NORETURN;
+void myassert();
 #ifndef NDEBUG
 #  define assert(X) if(!(X))myassert(__FILE__,__LINE__)
 #else
@@ -999,14 +981,12 @@ struct lemon *lemp;
 ** If either action is a SHIFT, then it must be apx.  This
 ** function won't work if apx->type==REDUCE and apy->type==SHIFT.
 */
-static int resolve_conflict(apx,apy,errsym)
+static int resolve_conflict(apx,apy)
 struct action *apx;
 struct action *apy;
-struct symbol *errsym;   /* The error symbol (if defined.  NULL otherwise) */
 {
   struct symbol *spx, *spy;
   int errcnt = 0;
-  UNUSED(errsym);
   assert( apx->sp==apy->sp );  /* Otherwise there would be no conflict */
   if( apx->type==SHIFT && apy->type==REDUCE ){
     spx = apx->sp;
@@ -1339,7 +1319,7 @@ void ErrorMsg(const char *filename, int lineno, const char *format, ...){
 /* Report an out-of-memory condition and abort.  This function
 ** is used mostly by the "MemoryCheck" macro in struct.h
 */
-void memory_error() {
+void memory_error(){
   fprintf(stderr,"Out of memory.  Aborting...\n");
   exit(1);
 }
@@ -1370,8 +1350,8 @@ char **argv;
   int i;
   struct lemon lem;
   char *def_tmpl_name = "lempar.c";
+  ( (void) argc ); // UNUSED(argc)
 
-  UNUSED(argc);
   OptInit(argv,options,stderr);
   if( version ){
      printf("Lemon version 1.0\n");
@@ -1614,6 +1594,7 @@ int k;
 FILE *err;
 {
   int spcnt, i;
+  spcnt = 0;
   if( argv[0] ) fprintf(err,"%s",argv[0]);
   spcnt = strlen(argv[0]) + 1;
   for(i=1; i<n && argv[i]; i++){
@@ -1675,7 +1656,7 @@ FILE *err;
   }else if( op[j].type==OPT_FLAG ){
     *((int*)op[j].arg) = v;
   }else if( op[j].type==OPT_FFLAG ){
-    (*(void(*)())(intptr_t)(op[j].arg))(v);
+    (*(void(*)())((intptr_t)op[j].arg))(v);
   }else{
     if( err ){
       fprintf(err,"%smissing argument on switch.\n",emsg);
@@ -1757,19 +1738,19 @@ FILE *err;
         *(double*)(op[j].arg) = dv;
         break;
       case OPT_FDBL:
-        (*(void(*)())(intptr_t)(op[j].arg))(dv);
+        (*(void(*)())((intptr_t)op[j].arg))(dv);
         break;
       case OPT_INT:
         *(int*)(op[j].arg) = lv;
         break;
       case OPT_FINT:
-        (*(void(*)())(intptr_t)(op[j].arg))((int)lv);
+        (*(void(*)())((intptr_t)op[j].arg))((int)lv);
         break;
       case OPT_STR:
         *(char**)(op[j].arg) = sv;
         break;
       case OPT_FSTR:
-        (*(void(*)())(intptr_t)(op[j].arg))(sv);
+        (*(void(*)())((intptr_t)op[j].arg))(sv);
         break;
     }
   }
@@ -2341,7 +2322,6 @@ struct lemon *gp;
   if( filebuf==0 ){
     ErrorMsg(ps.filename,0,"Can't allocate %d of memory to hold this file.",
       filesize+1);
-    fclose(fp);
     gp->errorcnt++;
     return;
   }
@@ -2349,7 +2329,6 @@ struct lemon *gp;
     ErrorMsg(ps.filename,0,"Can't read in all %d bytes of this file.",
       filesize);
     free(filebuf);
-    fclose(fp);
     gp->errorcnt++;
     return;
   }
@@ -2651,7 +2630,7 @@ struct lemon *lemp;
 }
 
 /* Print a plink chain */
-void PlinkPrint(out,plp,tag)
+PRIVATE void PlinkPrint(out,plp,tag)
 FILE *out;
 struct plink *plp;
 char *tag;
@@ -2742,7 +2721,6 @@ struct lemon *lemp;
   return;
 }
 
-  extern int access();
 /* Search for the file "name" which is in the same directory as
 ** the exacutable */
 PRIVATE char *pathsearch(argv0,name,modemask)
@@ -2920,7 +2898,7 @@ int *lineno;
  }else if( sp->destructor ){
    cp = sp->destructor;
    fprintf(out,"#line %d \"%s\"\n{",sp->destructorln,lemp->filename);
- }else{
+ }else if( lemp->vardest ){
    cp = lemp->vardest;
    if( cp==0 ) return;
    fprintf(out,"#line %d \"%s\"\n{",lemp->vardestln,lemp->filename);
@@ -3049,7 +3027,7 @@ struct lemon *lemp;         /* The main info structure for this parser */
 int *plineno;               /* Pointer to the line number */
 int mhflag;                 /* True if generating makeheaders output */
 {
-  int lineno;               /* The line number of the output */
+  int lineno = *plineno;    /* The line number of the output */
   char **types;             /* A hash table of datatypes */
   int arraysize;            /* Size of the "types" array */
   int maxdtlength;          /* Maximum length of any ".datatype" field. */

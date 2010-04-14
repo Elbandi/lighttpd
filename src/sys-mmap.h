@@ -1,7 +1,9 @@
 #ifndef WIN32_MMAP_H
 #define WIN32_MMAP_H
 
-#ifdef __WIN32
+#include "settings.h"
+
+#ifdef _WIN32
 
 #define MAP_FAILED -1
 #define PROT_SHARED 0

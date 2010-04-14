@@ -7,15 +7,15 @@ Module: mod_alias
 -----------------
 
 :Author: Jan Kneschke
-:Date: $Date: 2004/08/29 09:43:49 $
-:Revision: $Revision: 1.1 $
+:Date: $Date: 2005-03-28T08:30:05.699628Z $
+:Revision: $Revision: 227 $
 
 :abstract:
-  The alias module ...
-
+  The alias module ... 
+  
 .. meta::
   :keywords: lighttpd, alias
-
+  
 .. contents:: Table of Contents
 
 Description
@@ -32,5 +32,5 @@ alias.url
   Default: empty
 
   Example: ::
-
+    
     alias.url = ( "/cgi-bin/" => "/var/www/servers/www.example.org/cgi-bin/" )
