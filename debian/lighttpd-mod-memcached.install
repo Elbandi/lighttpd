@@ -1,0 +1,2 @@
+debian/tmp/usr/lib/lighttpd/mod_memcached_cache.so
+debian/conf-available/10-memcached-cache.conf etc/lighttpd/conf-available

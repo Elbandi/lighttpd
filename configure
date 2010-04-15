@@ -797,6 +797,7 @@ GTHREAD_LIBS
 GTHREAD_CFLAGS
 LUA_LIBS
 LUA_CFLAGS
+LIBMEMCACHED_LIB
 MEMCACHE_LIB
 GDBM_LIB
 UUID_LIB
@@ -958,6 +959,7 @@ with_webdav_props
 with_webdav_locks
 with_gdbm
 with_memcache
+with_libmemcached
 with_lua
 enable_lfs
 enable_ipv6
@@ -1648,6 +1650,7 @@ Optional Packages:
   --with-webdav-locks     locks in mod_webdav
   --with-gdbm             gdbm storage for mod_trigger_b4_dl
   --with-memcache         memcached storage for mod_trigger_b4_dl
+  --with-libmemcached     memcached storage for mod_memcached_cache
   --with-lua              lua engine for mod_magnet
 
 Some influential environment variables:
@@ -18774,6 +18777,83 @@ _ACEOF
 cat >>confdefs.h <<\_ACEOF
 #define HAVE_MEMCACHE_H 1
 _ACEOF
+
+
+fi
+
+done
+
+
+fi
+
+
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for libmemcached" >&5
+$as_echo_n "checking for libmemcached... " >&6; }
+
+# Check whether --with-libmemcached was given.
+if test "${with_libmemcached+set}" = set; then :
+  withval=$with_libmemcached; WITH_LIBMEMCACHED=$withval
+else
+  WITH_LIBMEMCACHED=no
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $WITH_LIBMEMCACHED" >&5
+$as_echo "$WITH_LIBMEMCACHED" >&6; }
+if test "$WITH_LIBMEMCACHED" != "no"; then
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking for memcached_create in -lmemcached" >&5
+$as_echo_n "checking for memcached_create in -lmemcached... " >&6; }
+if test "${ac_cv_lib_memcached_memcached_create+set}" = set; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lmemcached  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char memcached_create ();
+int
+main ()
+{
+return memcached_create ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_memcached_memcached_create=yes
+else
+  ac_cv_lib_memcached_memcached_create=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_memcached_memcached_create" >&5
+$as_echo "$ac_cv_lib_memcached_memcached_create" >&6; }
+if test "x$ac_cv_lib_memcached_memcached_create" = x""yes; then :
+
+         for ac_header in libmemcached/memcached.h
+do :
+  ac_fn_c_check_header_mongrel "$LINENO" "libmemcached/memcached.h" "ac_cv_header_libmemcached_memcached_h" "$ac_includes_default"
+if test "x$ac_cv_header_libmemcached_memcached_h" = x""yes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBMEMCACHED_MEMCACHED_H 1
+_ACEOF
+
+                 LIBMEMCACHED_LIB=-lmemcached
+
+$as_echo "#define HAVE_LIBMEMCACHED 1" >>confdefs.h
+
+
+$as_echo "#define HAVE_LIBMEMCACHED_H 1" >>confdefs.h
 
 
 fi

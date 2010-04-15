@@ -208,6 +208,14 @@ mod_expire_la_OBJECTS = $(am_mod_expire_la_OBJECTS)
 mod_expire_la_LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
 	$(mod_expire_la_LDFLAGS) $(LDFLAGS) -o $@
+mod_memcached_cache_la_DEPENDENCIES = $(am__DEPENDENCIES_1) \
+	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_2)
+am_mod_memcached_cache_la_OBJECTS = mod_memcached_cache.lo
+mod_memcached_cache_la_OBJECTS = $(am_mod_memcached_cache_la_OBJECTS)
+mod_memcached_cache_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
+	$(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=link $(CCLD) \
+	$(AM_CFLAGS) $(CFLAGS) $(mod_memcached_cache_la_LDFLAGS) \
+	$(LDFLAGS) -o $@
 mod_flv_streaming_la_DEPENDENCIES = $(am__DEPENDENCIES_2)
 am_mod_flv_streaming_la_OBJECTS = mod_flv_streaming.lo
 mod_flv_streaming_la_OBJECTS = $(am_mod_flv_streaming_la_OBJECTS)
@@ -500,6 +508,7 @@ DIST_SOURCES = $(am__liblightcomp_la_SOURCES_DIST) \
 	$(mod_compress_la_SOURCES) $(mod_deflate_la_SOURCES) \
 	$(mod_dirlisting_la_SOURCES) $(mod_evasive_la_SOURCES) \
 	$(mod_evhost_la_SOURCES) $(mod_expire_la_SOURCES) \
+	$(mod_memcached_cache_la_SOURCES) \
 	$(mod_flv_streaming_la_SOURCES) $(mod_indexfile_la_SOURCES) \
 	$(mod_magnet_la_SOURCES) $(mod_mysql_vhost_la_SOURCES) \
 	$(mod_postgresql_vhost_la_SOURCES) \
@@ -509,6 +518,7 @@ DIST_SOURCES = $(am__liblightcomp_la_SOURCES_DIST) \
 	$(mod_proxy_backend_scgi_la_SOURCES) \
 	$(mod_proxy_core_la_SOURCES) $(mod_redirect_la_SOURCES) \
 	$(mod_rewrite_la_SOURCES) $(mod_rrdtool_la_SOURCES) \
+	$(mod_memcached_cache_la_SOURCES) \
 	$(mod_secdownload_la_SOURCES) $(mod_setenv_la_SOURCES) \
 	$(mod_simple_vhost_la_SOURCES) \
 	$(mod_sql_vhost_core_la_SOURCES) $(mod_ssi_la_SOURCES) \
@@ -572,6 +582,7 @@ LBER_LIB = @LBER_LIB@
 LD = @LD@
 LDAP_LIB = @LDAP_LIB@
 LDFLAGS = @LDFLAGS@
+LIBMEMCACHED_LIB = @LIBMEMCACHED_LIB@
 LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
@@ -730,7 +741,7 @@ lib_LTLIBRARIES = $(am__append_1) mod_flv_streaming.la \
 	mod_proxy_backend_ajp13.la mod_ssi.la mod_secdownload.la \
 	mod_expire.la mod_evhost.la mod_simple_vhost.la mod_access.la \
 	mod_compress.la mod_auth.la mod_rewrite.la mod_redirect.la \
-	mod_status.la mod_accesslog.la mod_cache.la
+	mod_status.la mod_accesslog.la mod_cache.la mod_memcached_cache.la
 @NO_RDYNAMIC_TRUE@liblightcomp_la_SOURCES = $(common_src)
 @NO_RDYNAMIC_TRUE@liblightcomp_la_CFLAGS = $(AM_CFLAGS)
 @NO_RDYNAMIC_TRUE@liblightcomp_la_LDFLAGS = -avoid-version -no-undefined
@@ -774,6 +785,9 @@ mod_sql_vhost_core_la_LIBADD = $(common_libadd)
 mod_cgi_la_SOURCES = mod_cgi.c
 mod_cgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_cgi_la_LIBADD = $(common_libadd)
+mod_memcached_cache_la_SOURCES = mod_memcached_cache.c
+mod_memcached_cache_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_memcached_cache_la_LIBADD = $(LIBMEMCACHED_LIB) $(common_libadd)
 mod_staticfile_la_SOURCES = mod_staticfile.c 
 mod_staticfile_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_staticfile_la_LIBADD = $(common_libadd)
@@ -1015,6 +1029,8 @@ mod_indexfile.la: $(mod_indexfile_la_OBJECTS) $(mod_indexfile_la_DEPENDENCIES)
 	$(mod_indexfile_la_LINK) -rpath $(libdir) $(mod_indexfile_la_OBJECTS) $(mod_indexfile_la_LIBADD) $(LIBS)
 mod_magnet.la: $(mod_magnet_la_OBJECTS) $(mod_magnet_la_DEPENDENCIES) 
 	$(mod_magnet_la_LINK) -rpath $(libdir) $(mod_magnet_la_OBJECTS) $(mod_magnet_la_LIBADD) $(LIBS)
+mod_memcached_cache.la: $(mod_memcached_cache_la_OBJECTS) $(mod_memcached_cache_la_DEPENDENCIES) 
+	$(mod_memcached_cache_la_LINK) -rpath $(libdir) $(mod_memcached_cache_la_OBJECTS) $(mod_memcached_cache_la_LIBADD) $(LIBS)
 mod_mysql_vhost.la: $(mod_mysql_vhost_la_OBJECTS) $(mod_mysql_vhost_la_DEPENDENCIES) 
 	$(mod_mysql_vhost_la_LINK) -rpath $(libdir) $(mod_mysql_vhost_la_OBJECTS) $(mod_mysql_vhost_la_LIBADD) $(LIBS)
 mod_postgresql_vhost.la: $(mod_postgresql_vhost_la_OBJECTS) $(mod_postgresql_vhost_la_DEPENDENCIES) 
@@ -1220,6 +1236,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_indexfile.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_magnet_la-mod_magnet.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_magnet_la-mod_magnet_cache.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_memcached_cache.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_mysql_vhost_la-mod_mysql_vhost.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_postgresql_vhost_la-mod_postgresql_vhost.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_proxy_backend_ajp13.Plo@am__quote@

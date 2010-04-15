@@ -415,7 +415,23 @@ if test "$WITH_MEMCACHE" != "no"; then
  ])
  AC_SUBST(MEMCACHE_LIB)
 fi
-  
+
+dnl Check for libmemcached
+AC_MSG_CHECKING(for libmemcached)
+AC_ARG_WITH(libmemcached, AC_HELP_STRING([--with-libmemcached],[memcached storage for mod_memcached_cache]),
+[WITH_LIBMEMCACHED=$withval],[WITH_LIBMEMCACHED=no])
+AC_MSG_RESULT([$WITH_LIBMEMCACHED])
+if test "$WITH_LIBMEMCACHED" != "no"; then
+ AC_CHECK_LIB(memcached, memcached_create, [
+         AC_CHECK_HEADERS([libmemcached/memcached.h],[
+                 LIBMEMCACHED_LIB=-lmemcached
+                 AC_DEFINE([HAVE_LIBMEMCACHED], [1], [libmemcached])
+		 AC_DEFINE([HAVE_LIBMEMCACHED_H], [1], [libmemcached/memcached.h])
+         ])
+ ])
+ AC_SUBST(LIBMEMCACHED_LIB)
+fi
+
 dnl Check for lua
 AC_MSG_CHECKING(for lua)
 AC_ARG_WITH(lua, AC_HELP_STRING([--with-lua],[lua engine for mod_magnet]),
