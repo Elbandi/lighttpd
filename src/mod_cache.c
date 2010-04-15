@@ -761,6 +761,17 @@ get_memory_cache(handler_ctx *hctx)
 	memory_store[i] = splaytree_splay(memory_store[i], hctx->hash);
 	if (memory_store[i] == NULL || memory_store[i]->key != hctx->hash)
 		return NULL;
+
+	if (memory_store[i]->size >= 20) {
+		/* free hashmap whose size is bigger than 20 */
+		while(memory_store[i]) {
+			free_memory_cache_chain((struct memory_cache *)(memory_store[i]->data));
+			memory_store[i] = splaytree_delete(memory_store[i], memory_store[i]->key);
+		}
+
+		return NULL;
+	}
+
 	cp = c = (struct memory_cache *)memory_store[i]->data;
 	while (c) {
 		if (c->memoryid == NULL || !buffer_is_equal(hctx->memoryid, c->memoryid)) {
