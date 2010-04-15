@@ -423,7 +423,7 @@ URIHANDLER_FUNC(mod_staticfile_subrequest) {
 		}
 	}
 
-	if (NULL == array_get_element(con->response.headers, CONST_STR_LEN("ETag"))) {
+	if (con->use_cache_file == 0 && NULL == array_get_element(con->response.headers, CONST_STR_LEN("ETag"))) {
 		/* generate e-tag */
 		etag_mutate(con->physical.etag, sce->etag);
 
@@ -436,12 +436,13 @@ URIHANDLER_FUNC(mod_staticfile_subrequest) {
 	/* prepare header */
 	if (NULL == (ds = (data_string *)array_get_element(con->response.headers, CONST_STR_LEN("Last-Modified")))) {
 		mtime = strftime_cache_get(srv, sce->st.st_mtime);
+		if (con->use_cache_file == 0)
 		response_header_overwrite(srv, con, CONST_STR_LEN("Last-Modified"), CONST_BUF_LEN(mtime));
 	} else {
 		mtime = ds->value;
 	}
 
-	if (HANDLER_FINISHED == http_response_handle_cachable(srv, con, mtime)) {
+	if (HANDLER_FINISHED == http_response_handle_cachable(srv, con, mtime, con->physical.etag)) {
 		return HANDLER_FINISHED;
 	} else if (con->conf.range_requests &&
 	           NULL != array_get_element(con->request.headers, CONST_STR_LEN("Range"))) {
@@ -452,7 +453,7 @@ URIHANDLER_FUNC(mod_staticfile_subrequest) {
 			/* if the value is the same as our ETag, we do a Range-request,
 			 * otherwise a full 200 */
 
-			if (!buffer_is_equal(ds->value, con->physical.etag)) {
+			if (con->use_cache_file == 0 && !buffer_is_equal(ds->value, con->physical.etag)) {
 				do_range_request = 0;
 			}
 		}

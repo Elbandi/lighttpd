@@ -787,7 +787,7 @@ PHYSICALPATH_FUNC(mod_compress_physical) {
 
 	/* perhaps we don't even have to compress the file as the browser still has the
 	 * current version */
-	if (HANDLER_FINISHED == http_response_handle_cachable(srv, con, mtime)) {
+	if (HANDLER_FINISHED == http_response_handle_cachable(srv, con, mtime, con->physical.etag)) {
 		if (con->conf.log_request_handling) TRACE("%s is still the same, caching", SAFE_BUF_STR(con->physical.path));
 		return HANDLER_FINISHED;
 	}
