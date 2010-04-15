@@ -172,24 +172,6 @@ gzip_cache_free(struct gzip_cache *cache)
 	memset(cache, 0, sizeof(struct gzip_cache));
 }
 
-#ifndef LIGHTTPD_V14
-/* the famous DJB hash function for strings */
-uint32_t
-hashme(buffer *str)
-{
-        uint32_t hash = 5381;
-        const char *s;
-        for (s = str->ptr; *s; s++) {
-                hash = ((hash << 5) + hash) + *s;
-        }
-
-        hash &= ~(1 << 31); /* strip the highest bit */
-
-        return hash;
-}
-
-#endif
-
 /* reset cache_entry to initial state */
 static void
 init_gzip_cache(struct gzip_cache *cache)

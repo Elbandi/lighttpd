@@ -238,6 +238,19 @@ static int stat_cache_attr_get(buffer *buf, char *name) {
 }
 #endif
 
+/* the famous DJB hash function for strings */
+uint32_t hashme(buffer *str) {
+	uint32_t hash = 5381;
+	const char *s;
+	for (s = str->ptr; *s; s++) {
+		hash = ((hash << 5) + hash) + *s;
+	}
+
+	hash &= ~(1 << 31); /* strip the highest bit */
+
+	return hash;
+}
+
 handler_t stat_cache_handle_fdevent(void *_srv, void *_fce, int revent) {
 	server *srv = _srv;
 

@@ -359,21 +359,6 @@ splaytree_delete(splay_tree *t, int i)
 
 /* splaytree implementation ends here */
 
-/* the famous DJB hash function for strings */
-uint32_t
-hashme(buffer *str)
-{
-        uint32_t hash = 5381;
-        const char *s;
-        for (s = str->ptr; *s; s++) {
-                hash = ((hash << 5) + hash) + *s;
-        }
-
-        hash &= ~(1 << 31); /* strip the highest bit */
-
-        return hash;
-}
-
 #endif
 
 /* init cache_entry table */
