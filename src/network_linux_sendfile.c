@@ -1,12 +1,10 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* we need O_DIRECT */
+#endif
+
 #include "network_backends.h"
 
 #ifdef USE_LINUX_SENDFILE
-
-#include "network.h"
-#include "fdevent.h"
-#include "log.h"
-#include "stat_cache.h"
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -24,109 +22,42 @@
 #include <stdlib.h>
 #include <fcntl.h>
 
+#include "network.h"
+#include "fdevent.h"
+#include "log.h"
+#include "stat_cache.h"
+#include "sys-files.h"
+
 /* on linux 2.4.29 + debian/ubuntu we have crashes if this is enabled */
 #undef HAVE_POSIX_FADVISE
 
-int network_write_chunkqueue_linuxsendfile(server *srv, connection *con, int fd, chunkqueue *cq) {
-	chunk *c;
+NETWORK_BACKEND_WRITE(linuxsendfile) {
+	chunk *c, *tc;
 	size_t chunks_written = 0;
 
 	for(c = cq->first; c; c = c->next, chunks_written++) {
 		int chunk_finished = 0;
+		network_status_t ret;
 
 		switch(c->type) {
-		case MEM_CHUNK: {
-			char * offset;
-			size_t toSend;
-			ssize_t r;
+		case MEM_CHUNK:
+			ret = network_write_chunkqueue_writev_mem(srv, con, sock, cq, c);
 
-			size_t num_chunks, i;
-			struct iovec chunks[UIO_MAXIOV];
-			chunk *tc;
-			size_t num_bytes = 0;
-
-			/* we can't send more then SSIZE_MAX bytes in one chunk */
-
-			/* build writev list
-			 *
-			 * 1. limit: num_chunks < UIO_MAXIOV
-			 * 2. limit: num_bytes < SSIZE_MAX
-			 */
-			for (num_chunks = 0, tc = c;
-			     tc && tc->type == MEM_CHUNK && num_chunks < UIO_MAXIOV;
-			     tc = tc->next, num_chunks++);
-
-			for (tc = c, i = 0; i < num_chunks; tc = tc->next, i++) {
-				if (tc->mem->used == 0) {
-					chunks[i].iov_base = tc->mem->ptr;
-					chunks[i].iov_len  = 0;
+			/* check which chunks are finished now */
+			for (tc = c; tc && chunk_is_done(tc); tc = tc->next) {
+				/* skip the first c->next as that will be done by the c = c->next in the other for()-loop */
+				if (chunk_finished) {
+					c = c->next;
 				} else {
-					offset = tc->mem->ptr + tc->offset;
-					toSend = tc->mem->used - 1 - tc->offset;
-
-					chunks[i].iov_base = offset;
-
-					/* protect the return value of writev() */
-					if (toSend > SSIZE_MAX ||
-					    num_bytes + toSend > SSIZE_MAX) {
-						chunks[i].iov_len = SSIZE_MAX - num_bytes;
-
-						num_chunks = i + 1;
-						break;
-					} else {
-						chunks[i].iov_len = toSend;
-					}
-
-					num_bytes += toSend;
+					chunk_finished = 1;
 				}
 			}
 
-			if ((r = writev(fd, chunks, num_chunks)) < 0) {
-				switch (errno) {
-				case EAGAIN:
-				case EINTR:
-					r = 0;
-					break;
-				case EPIPE:
-				case ECONNRESET:
-					return -2;
-				default:
-					log_error_write(srv, __FILE__, __LINE__, "ssd",
-							"writev failed:", strerror(errno), fd);
-
-					return -1;
-				}
-			}
-
-			/* check which chunks have been written */
-			cq->bytes_out += r;
-
-			for(i = 0, tc = c; i < num_chunks; i++, tc = tc->next) {
-				if (r >= (ssize_t)chunks[i].iov_len) {
-					/* written */
-					r -= chunks[i].iov_len;
-					tc->offset += chunks[i].iov_len;
-
-					if (chunk_finished) {
-						/* skip the chunks from further touches */
-						chunks_written++;
-						c = c->next;
-					} else {
-						/* chunks_written + c = c->next is done in the for()*/
-						chunk_finished++;
-					}
-				} else {
-					/* partially written */
-
-					tc->offset += r;
-					chunk_finished = 0;
-
-					break;
-				}
+			if (ret != NETWORK_STATUS_SUCCESS) {
+				return ret;
 			}
 
 			break;
-		}
 		case FILE_CHUNK: {
 			ssize_t r;
 			off_t offset;
@@ -140,8 +71,15 @@ int network_write_chunkqueue_linuxsendfile(server *srv, connection *con, int fd,
 
 			/* open file if not already opened */
 			if (-1 == c->file.fd) {
-				if (-1 == (c->file.fd = open(c->file.name->ptr, O_RDONLY))) {
-					log_error_write(srv, __FILE__, __LINE__, "ss", "open failed: ", strerror(errno));
+				if (-1 == (c->file.fd = open(c->file.name->ptr, O_RDONLY | (srv->srvconf.use_noatime ? O_NOATIME : 0)))) {
+					switch (errno) {
+					case EMFILE:
+						return NETWORK_STATUS_WAIT_FOR_FD;
+					default:
+						ERROR("opening '%s' failed: %s", SAFE_BUF_STR(c->file.name), strerror(errno));
+
+						return NETWORK_STATUS_FATAL_ERROR;
+					}
 
 					return -1;
 				}
@@ -159,23 +97,26 @@ int network_write_chunkqueue_linuxsendfile(server *srv, connection *con, int fd,
 #endif
 			}
 
-			if (-1 == (r = sendfile(fd, c->file.fd, &offset, toSend))) {
+			if (-1 == (r = sendfile(sock->fd, c->file.fd, &offset, toSend))) {
 				switch (errno) {
 				case EAGAIN:
 				case EINTR:
-					/* ok, we can't send more, let's try later again */
-					r = 0;
-					break;
+					return NETWORK_STATUS_WAIT_FOR_EVENT;
 				case EPIPE:
 				case ECONNRESET:
-					return -2;
+					return NETWORK_STATUS_CONNECTION_CLOSE;
+				case ENOSYS:
+					ERROR("sendfile(%s) is not implemented, use server.network-backend = \"writev\"", 
+						SAFE_BUF_STR(c->file.name));
+					return NETWORK_STATUS_FATAL_ERROR;
 				default:
 					log_error_write(srv, __FILE__, __LINE__, "ssd",
-							"sendfile failed:", strerror(errno), fd);
-					return -1;
+							"sendfile failed:", strerror(errno), sock->fd);
+					return NETWORK_STATUS_FATAL_ERROR;
 				}
-			} else if (r == 0) {
-				int oerrno = errno;
+			}
+
+			if (r == 0) {
 				/* We got an event to write but we wrote nothing
 				 *
 				 * - the file shrinked -> error
@@ -183,18 +124,15 @@ int network_write_chunkqueue_linuxsendfile(server *srv, connection *con, int fd,
 
 				if (HANDLER_ERROR == stat_cache_get_entry(srv, con, c->file.name, &sce)) {
 					/* file is gone ? */
-					return -1;
+					return NETWORK_STATUS_FATAL_ERROR;
 				}
 
 				if (offset > sce->st.st_size) {
 					/* file shrinked, close the connection */
-					errno = oerrno;
-
-					return -1;
+					return NETWORK_STATUS_FATAL_ERROR;
 				}
 
-				errno = oerrno;
-				return -2;
+				return NETWORK_STATUS_CONNECTION_CLOSE;
 			}
 
 #ifdef HAVE_POSIX_FADVISE
@@ -233,17 +171,17 @@ int network_write_chunkqueue_linuxsendfile(server *srv, connection *con, int fd,
 
 			log_error_write(srv, __FILE__, __LINE__, "ds", c, "type not known");
 
-			return -1;
+			return NETWORK_STATUS_FATAL_ERROR;
 		}
 
 		if (!chunk_finished) {
 			/* not finished yet */
 
-			break;
+			return NETWORK_STATUS_WAIT_FOR_EVENT;
 		}
 	}
 
-	return chunks_written;
+	return NETWORK_STATUS_SUCCESS;
 }
 
 #endif

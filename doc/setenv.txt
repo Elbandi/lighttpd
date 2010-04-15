@@ -7,15 +7,15 @@ Module: mod_setenv
 ------------------
 
 :Author: Jan Kneschke
-:Date: $Date: 2004/11/03 22:26:05 $
-:Revision: $Revision: 1.2 $
+:Date: $Date: 2005-03-28T08:30:05.699628Z $
+:Revision: $Revision: 227 $
 
 :abstract:
   mod_setenv is used to add request
-
+  
 .. meta::
   :keywords: lighttpd, skeleton
-
+  
 .. contents:: Table of Contents
 
 Description

@@ -8,12 +8,12 @@ BEGIN {
 
 use strict;
 use IO::Socket;
-use Test::More tests => 18;
+use Test::More tests => 19;
 use LightyTest;
 
 my $tf = LightyTest->new();
 my $t;
-
+    
 ok($tf->start_proc == 0, "Starting lighttpd") or die();
 
 # mod-cgi
@@ -43,7 +43,7 @@ $t->{REQUEST}  = ( <<EOF
 GET /nph-status.pl?30 HTTP/1.0
 EOF
  );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200 } ];
+$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 502 } ];
 ok($tf->handle_http($t) == 0, 'NPH + perl, invalid status-code (#14)');
 
 $t->{REQUEST}  = ( <<EOF
@@ -59,6 +59,16 @@ EOF
  );
 $t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200 } ];
 ok($tf->handle_http($t) == 0, 'NPH + perl, setting status-code');
+
+TODO: {
+  local $TODO = "NPH current isn't working";
+$t->{REQUEST}  = ( <<EOF
+GET /nph-status.pl?textcontent HTTP/1.0
+EOF
+ );
+$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200, 'HTTP-Content' => 'textcontent' } ];
+ok($tf->handle_http($t) == 0, 'NPH + perl, sending content without headers');
+}
 
 $t->{REQUEST} = ( <<EOF
 GET /get-header.pl?GATEWAY_INTERFACE HTTP/1.0
@@ -122,21 +132,21 @@ $t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200, 'Conte
 ok($tf->handle_http($t) == 0, 'cgi-env: HTTP_HOST');
 
 $t->{REQUEST}  = ( <<EOF
-GET /get-header.pl?HTTP_HOST HTTP/1.1
+GET /get-header.pl?HTTP_HOST HTTP/1.0
+Host: www.example.org
+EOF
+ );
+$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200, '+Content-Length' => '' } ];
+ok($tf->handle_http($t) == 0, 'cgi-env: HTTP_HOST');
+
+$t->{REQUEST}  = ( <<EOF
+GET /get-header.pl?CONTENT_LENGTH HTTP/1.0
 Host: www.example.org
 Connection: close
 EOF
  );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.1', 'HTTP-Status' => 200, '+Content-Length' => '' } ];
-ok($tf->handle_http($t) == 0, 'cgi-env: HTTP_HOST');
-
-# broken header crash
-$t->{REQUEST}  = ( <<EOF
-GET /crlfcrash.pl HTTP/1.0
-EOF
- );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 302, 'Location' => 'http://www.example.org/' } ];
-ok($tf->handle_http($t) == 0, 'broken header via perl cgi');
+$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 200, 'HTTP-Content' => '' } ];
+ok($tf->handle_http($t) == 0, 'cgi-env: CONTENT_LENGTH');
 
 ok($tf->stop_proc == 0, "Stopping lighttpd");
 

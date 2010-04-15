@@ -1,12 +1,13 @@
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "joblist.h"
 #include "log.h"
 
-#include <stdlib.h>
-#include <string.h>
-
 int joblist_append(server *srv, connection *con) {
 	if (con->in_joblist) return 0;
+	con->in_joblist = 1;
 
 	if (srv->joblist->size == 0) {
 		srv->joblist->size  = 16;

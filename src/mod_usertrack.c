@@ -1,12 +1,12 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
 
 #include "plugin.h"
-
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
 
 #ifdef USE_OPENSSL
 # include <openssl/md5.h>
@@ -19,7 +19,7 @@
 typedef struct {
 	buffer *cookie_name;
 	buffer *cookie_domain;
-	unsigned int cookie_max_age;
+	unsigned short cookie_max_age;
 } plugin_config;
 
 typedef struct {
@@ -33,6 +33,8 @@ typedef struct {
 /* init the plugin data */
 INIT_FUNC(mod_usertrack_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -73,7 +75,7 @@ SETDEFAULTS_FUNC(mod_usertrack_set_defaults) {
 
 	config_values_t cv[] = {
 		{ "usertrack.cookie-name",       NULL, T_CONFIG_STRING, T_CONFIG_SCOPE_CONNECTION },       /* 0 */
-		{ "usertrack.cookie-max-age",    NULL, T_CONFIG_INT, T_CONFIG_SCOPE_CONNECTION },          /* 1 */
+		{ "usertrack.cookie-max-age",    NULL, T_CONFIG_SHORT, T_CONFIG_SCOPE_CONNECTION },        /* 1 */
 		{ "usertrack.cookie-domain",     NULL, T_CONFIG_STRING, T_CONFIG_SCOPE_CONNECTION },       /* 2 */
 
 		{ "usertrack.cookiename",        NULL, T_CONFIG_DEPRECATED, T_CONFIG_SCOPE_CONNECTION },
@@ -136,15 +138,13 @@ SETDEFAULTS_FUNC(mod_usertrack_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_usertrack_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(cookie_name);
-	PATCH(cookie_domain);
-	PATCH(cookie_max_age);
+	PATCH_OPTION(cookie_name);
+	PATCH_OPTION(cookie_domain);
+	PATCH_OPTION(cookie_max_age);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -159,18 +159,17 @@ static int mod_usertrack_patch_connection(server *srv, connection *con, plugin_d
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("usertrack.cookie-name"))) {
-				PATCH(cookie_name);
+				PATCH_OPTION(cookie_name);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("usertrack.cookie-max-age"))) {
-				PATCH(cookie_max_age);
+				PATCH_OPTION(cookie_max_age);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("usertrack.cookie-domain"))) {
-				PATCH(cookie_domain);
+				PATCH_OPTION(cookie_domain);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 URIHANDLER_FUNC(mod_usertrack_uri_handler) {
 	plugin_data *p = p_d;
@@ -183,7 +182,7 @@ URIHANDLER_FUNC(mod_usertrack_uri_handler) {
 
 	mod_usertrack_patch_connection(srv, con, p);
 
-	if (NULL != (ds = (data_string *)array_get_element(con->request.headers, "Cookie"))) {
+	if (NULL != (ds = (data_string *)array_get_element(con->request.headers, CONST_STR_LEN("Cookie")))) {
 		char *g;
 		/* we have a cookie, does it contain a valid name ? */
 
@@ -256,8 +255,8 @@ URIHANDLER_FUNC(mod_usertrack_uri_handler) {
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_usertrack_plugin_init(plugin *p);
-int mod_usertrack_plugin_init(plugin *p) {
+LI_EXPORT int mod_usertrack_plugin_init(plugin *p);
+LI_EXPORT int mod_usertrack_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("usertrack");
 

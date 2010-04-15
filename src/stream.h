@@ -8,7 +8,7 @@ typedef struct {
 	off_t size;
 } stream;
 
-int stream_open(stream *f, buffer *fn);
-int stream_close(stream *f);
+LI_EXPORT int stream_open(stream *f, buffer *fn);
+LI_EXPORT int stream_close(stream *f);
 
 #endif

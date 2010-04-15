@@ -1,14 +1,20 @@
+/*
+ * make sure _GNU_SOURCE is defined
+ */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+
 #include "base.h"
 #include "array.h"
 #include "buffer.h"
 #include "log.h"
 #include "etag.h"
 #include "response.h"
-
-#include <string.h>
-#include <errno.h>
-
-#include <time.h>
 
 /*
  * This was 'borrowed' from tcpdump.
@@ -94,24 +100,9 @@ int response_header_overwrite(server *srv, connection *con, const char *key, siz
 	UNUSED(srv);
 
 	/* if there already is a key by this name overwrite the value */
-	if (NULL != (ds = (data_string *)array_get_element(con->response.headers, key))) {
+	if (NULL != (ds = (data_string *)array_get_element(con->response.headers, key, keylen))) {
 		buffer_copy_string(ds->value, value);
 
-		return 0;
-	}
-
-	return response_header_insert(srv, con, key, keylen, value, vallen);
-}
-
-int response_header_append(server *srv, connection *con, const char *key, size_t keylen, const char *value, size_t vallen) {
-	data_string *ds;
-
-	UNUSED(srv);
-
-	/* if there already is a key by this name append the value */
-	if (NULL != (ds = (data_string *)array_get_element(con->response.headers, key))) {
-		buffer_append_string_len(ds->value, CONST_STR_LEN(", "));
-		buffer_append_string_len(ds->value, value, vallen);
 		return 0;
 	}
 
@@ -141,7 +132,7 @@ int http_response_redirect_to_directory(server *srv, connection *con) {
 
 		our_addr_len = sizeof(our_addr);
 
-		if (-1 == getsockname(con->fd, &(our_addr.plain), &our_addr_len)) {
+		if (-1 == getsockname(con->sock->fd, &(our_addr.plain), &our_addr_len)) {
 			con->http_status = 500;
 
 			log_error_write(srv, __FILE__, __LINE__, "ss",
@@ -162,9 +153,8 @@ int http_response_redirect_to_directory(server *srv, connection *con) {
 
 				char dst[INET6_ADDRSTRLEN];
 
-				log_error_write(srv, __FILE__, __LINE__,
-						"SSS", "NOTICE: getnameinfo failed: ",
-						strerror(errno), ", using ip-address instead");
+				ERROR("NOTICE: getnameinfo() failed: %s, using ip-address instead",
+						strerror(errno));
 
 				buffer_append_string(o,
 						     inet_ntop(AF_INET6, (char *)&our_addr.ipv6.sin6_addr,
@@ -176,9 +166,8 @@ int http_response_redirect_to_directory(server *srv, connection *con) {
 #endif
 		case AF_INET:
 			if (NULL == (he = gethostbyaddr((char *)&our_addr.ipv4.sin_addr, sizeof(struct in_addr), AF_INET))) {
-				log_error_write(srv, __FILE__, __LINE__,
-						"SdS", "NOTICE: gethostbyaddr failed: ",
-						h_errno, ", using ip-address instead");
+				ERROR("NOTICE: gethostbyaddr() failed: %d, using ip-address instead",
+						h_errno);
 
 				buffer_append_string(o, inet_ntoa(our_addr.ipv4.sin_addr));
 			} else {
@@ -186,8 +175,7 @@ int http_response_redirect_to_directory(server *srv, connection *con) {
 			}
 			break;
 		default:
-			log_error_write(srv, __FILE__, __LINE__,
-					"S", "ERROR: unsupported address-type");
+			ERROR("ERROR: unsupported address-type, %d", our_addr.plain.sa_family);
 
 			buffer_free(o);
 			return -1;
@@ -209,7 +197,7 @@ int http_response_redirect_to_directory(server *srv, connection *con) {
 	response_header_insert(srv, con, CONST_STR_LEN("Location"), CONST_BUF_LEN(o));
 
 	con->http_status = 301;
-	con->file_finished = 1;
+	con->send->is_closed = 1; /* no content */
 
 	buffer_free(o);
 
@@ -245,6 +233,11 @@ buffer * strftime_cache_get(server *srv, time_t last_mod) {
 
 
 int http_response_handle_cachable(server *srv, connection *con, buffer *mtime) {
+	data_string *http_if_none_match;
+	data_string *http_if_modified_since;
+
+	UNUSED(srv);
+
 	/*
 	 * 14.26 If-None-Match
 	 *    [...]
@@ -255,62 +248,66 @@ int http_response_handle_cachable(server *srv, connection *con, buffer *mtime) {
 	 *    return a 304 (Not Modified) response.
 	 */
 
+	http_if_none_match = (data_string *)array_get_element(con->request.headers, CONST_STR_LEN("if-none-match"));
+	http_if_modified_since = (data_string *)array_get_element(con->request.headers, CONST_STR_LEN("if-modified-since"));
+
 	/* last-modified handling */
-	if (con->request.http_if_none_match) {
-		if (etag_is_equal(con->physical.etag, con->request.http_if_none_match)) {
+	if (http_if_none_match) {
+		if (etag_is_equal(con->physical.etag, BUF_STR(http_if_none_match->value))) {
 			if (con->request.http_method == HTTP_METHOD_GET ||
 			    con->request.http_method == HTTP_METHOD_HEAD) {
 
 				/* check if etag + last-modified */
-				if (con->request.http_if_modified_since) {
+				if (http_if_modified_since) {
 					size_t used_len;
 					char *semicolon;
 
-					if (NULL == (semicolon = strchr(con->request.http_if_modified_since, ';'))) {
-						used_len = strlen(con->request.http_if_modified_since);
+					if (NULL == (semicolon = strchr(BUF_STR(http_if_modified_since->value), ';'))) {
+						used_len = http_if_modified_since->value->used - 1;
 					} else {
-						used_len = semicolon - con->request.http_if_modified_since;
+						used_len = semicolon - BUF_STR(http_if_modified_since->value);
 					}
 
-					if (0 == strncmp(con->request.http_if_modified_since, mtime->ptr, used_len)) {
-						if ('\0' == mtime->ptr[used_len]) con->http_status = 304;
+					if (0 == strncmp(BUF_STR(http_if_modified_since->value), mtime->ptr, used_len)) {
+						con->http_status = 304;
 						return HANDLER_FINISHED;
 					} else {
+#ifdef HAVE_STRPTIME
 						char buf[sizeof("Sat, 23 Jul 2005 21:20:01 GMT")];
 						time_t t_header, t_file;
 						struct tm tm;
 
 						/* check if we can safely copy the string */
 						if (used_len >= sizeof(buf)) {
-							log_error_write(srv, __FILE__, __LINE__, "ssdd",
-									"DEBUG: Last-Modified check failed as the received timestamp was too long:",
-									con->request.http_if_modified_since, used_len, sizeof(buf) - 1);
+							TRACE("last-mod check failed as timestamp was too long: %s: %zu, %zu",
+									SAFE_BUF_STR(http_if_modified_since->value),
+									used_len, sizeof(buf) - 1);
 
 							con->http_status = 412;
-							con->mode = DIRECT;
 							return HANDLER_FINISHED;
 						}
 
 
-						strncpy(buf, con->request.http_if_modified_since, used_len);
+						strncpy(buf, BUF_STR(http_if_modified_since->value), used_len);
 						buf[used_len] = '\0';
 
+						tm.tm_isdst = 0;
 						if (NULL == strptime(buf, "%a, %d %b %Y %H:%M:%S GMT", &tm)) {
 							con->http_status = 412;
-							con->mode = DIRECT;
 							return HANDLER_FINISHED;
 						}
-						tm.tm_isdst = 0;
 						t_header = mktime(&tm);
 
 						strptime(mtime->ptr, "%a, %d %b %Y %H:%M:%S GMT", &tm);
-						tm.tm_isdst = 0;
 						t_file = mktime(&tm);
 
 						if (t_file > t_header) return HANDLER_GO_ON;
 
 						con->http_status = 304;
 						return HANDLER_FINISHED;
+#else
+						return HANDLER_GO_ON;
+#endif
 					}
 				} else {
 					con->http_status = 304;
@@ -318,24 +315,24 @@ int http_response_handle_cachable(server *srv, connection *con, buffer *mtime) {
 				}
 			} else {
 				con->http_status = 412;
-				con->mode = DIRECT;
 				return HANDLER_FINISHED;
 			}
 		}
-	} else if (con->request.http_if_modified_since) {
+	} else if (http_if_modified_since) {
 		size_t used_len;
 		char *semicolon;
 
-		if (NULL == (semicolon = strchr(con->request.http_if_modified_since, ';'))) {
-			used_len = strlen(con->request.http_if_modified_since);
+		if (NULL == (semicolon = strchr(BUF_STR(http_if_modified_since->value), ';'))) {
+			used_len = http_if_modified_since->value->used - 1;
 		} else {
-			used_len = semicolon - con->request.http_if_modified_since;
+			used_len = semicolon - BUF_STR(http_if_modified_since->value);
 		}
 
-		if (0 == strncmp(con->request.http_if_modified_since, mtime->ptr, used_len)) {
-			if ('\0' == mtime->ptr[used_len]) con->http_status = 304;
+		if (0 == strncmp(BUF_STR(http_if_modified_since->value), mtime->ptr, used_len)) {
+			con->http_status = 304;
 			return HANDLER_FINISHED;
 		} else {
+#ifdef HAVE_STRPTIME
 			char buf[sizeof("Sat, 23 Jul 2005 21:20:01 GMT")];
 			time_t t_header, t_file;
 			struct tm tm;
@@ -343,26 +340,25 @@ int http_response_handle_cachable(server *srv, connection *con, buffer *mtime) {
 			/* convert to timestamp */
 			if (used_len >= sizeof(buf)) return HANDLER_GO_ON;
 
-			strncpy(buf, con->request.http_if_modified_since, used_len);
+			strncpy(buf, BUF_STR(http_if_modified_since->value), used_len);
 			buf[used_len] = '\0';
 
+			tm.tm_isdst = 0;
 			if (NULL == strptime(buf, "%a, %d %b %Y %H:%M:%S GMT", &tm)) {
-				/**
-				 * parsing failed, let's get out of here 
-				 */
 				return HANDLER_GO_ON;
 			}
-			tm.tm_isdst = 0;
 			t_header = mktime(&tm);
 
 			strptime(mtime->ptr, "%a, %d %b %Y %H:%M:%S GMT", &tm);
-			tm.tm_isdst = 0;
 			t_file = mktime(&tm);
 
 			if (t_file > t_header) return HANDLER_GO_ON;
 
 			con->http_status = 304;
 			return HANDLER_FINISHED;
+#else
+            return HANDLER_GO_ON;
+#endif
 		}
 	}
 

@@ -1,11 +1,10 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* we need O_DIRECT */
+#endif
+
 #include "network_backends.h"
 
 #ifdef USE_WRITEV
-
-#include "network.h"
-#include "fdevent.h"
-#include "log.h"
-#include "stat_cache.h"
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -26,131 +25,147 @@
 #include <stdio.h>
 #include <assert.h>
 
+#include "network.h"
+#include "fdevent.h"
+#include "log.h"
+#include "stat_cache.h"
+#include "sys-files.h"
+
+#ifndef UIO_MAXIOV
+# if defined(__FreeBSD__) || defined(__APPLE__) || defined(__NetBSD__)
+/* FreeBSD 4.7 defines it in sys/uio.h only if _KERNEL is specified */
+#  define UIO_MAXIOV 1024
+# elif defined(__sgi)
+/* IRIX 6.5 has sysconf(_SC_IOV_MAX) which might return 512 or bigger */
+#  define UIO_MAXIOV 512
+# elif defined(__sun)
+/* Solaris (and SunOS?) defines IOV_MAX instead */
+#  ifndef IOV_MAX
+#   define UIO_MAXIOV 16
+#  else
+#   define UIO_MAXIOV IOV_MAX
+#  endif
+# elif defined(IOV_MAX)
+#  define UIO_MAXIOV IOV_MAX
+# else
+#  error UIO_MAXIOV nor IOV_MAX are defined
+# endif
+#endif
+
 #if 0
 #define LOCAL_BUFFERING 1
 #endif
 
-int network_write_chunkqueue_writev(server *srv, connection *con, int fd, chunkqueue *cq) {
-	chunk *c;
-	size_t chunks_written = 0;
+NETWORK_BACKEND_WRITE_CHUNK(writev_mem) {
+	char * offset;
+	size_t toSend;
+	ssize_t r;
+
+	size_t num_chunks, i;
+	struct iovec chunks[UIO_MAXIOV];
+	chunk *tc; /* transfer chunks */
+	size_t num_bytes = 0;
+
+	UNUSED(con);
+	/* we can't send more then SSIZE_MAX bytes in one chunk */
+
+	/* build writev list
+	 *
+	 * 1. limit: num_chunks < UIO_MAXIOV
+	 * 2. limit: num_bytes < SSIZE_MAX
+	 */
+	for(num_chunks = 0, tc = c; tc && tc->type == MEM_CHUNK && num_chunks < UIO_MAXIOV; num_chunks++, tc = tc->next);
+
+	for(tc = c, i = 0; i < num_chunks; tc = tc->next, i++) {
+		if (tc->mem->used == 0) {
+			chunks[i].iov_base = tc->mem->ptr;
+			chunks[i].iov_len  = 0;
+		} else {
+			offset = tc->mem->ptr + tc->offset;
+			toSend = tc->mem->used - 1 - tc->offset;
+
+			chunks[i].iov_base = offset;
+
+			/* protect the return value of writev() */
+			if (toSend > SSIZE_MAX ||
+			    num_bytes + toSend > SSIZE_MAX) {
+				chunks[i].iov_len = SSIZE_MAX - num_bytes;
+
+				num_chunks = i + 1;
+				break;
+			} else {
+				chunks[i].iov_len = toSend;
+			}
+
+			num_bytes += toSend;
+		}
+	}
+
+	if ((r = writev(sock->fd, chunks, num_chunks)) < 0) {
+		switch (errno) {
+		case EAGAIN:
+			return NETWORK_STATUS_WAIT_FOR_EVENT;
+		case EINTR:
+			return NETWORK_STATUS_INTERRUPTED;
+		case EPIPE:
+		case ECONNRESET:
+			return NETWORK_STATUS_CONNECTION_CLOSE;
+		default:
+			log_error_write(srv, __FILE__, __LINE__, "ssd",
+					"writev failed:", strerror(errno), sock->fd);
+
+			return NETWORK_STATUS_FATAL_ERROR;
+		}
+	}
+
+	cq->bytes_out += r;
+
+	/* check which chunks have been written */
+
+	for(i = 0, tc = c; i < num_chunks; i++, tc = tc->next) {
+		if (r >= (ssize_t)chunks[i].iov_len) {
+			/* written */
+			r -= chunks[i].iov_len;
+			tc->offset += chunks[i].iov_len;
+		} else {
+			/* partially written */
+
+			tc->offset += r;
+
+			return NETWORK_STATUS_WAIT_FOR_EVENT;
+		}
+	}
+
+	/* all chunks have been pushed out */
+	return NETWORK_STATUS_SUCCESS;
+}
+
+NETWORK_BACKEND_WRITE(writev) {
+	chunk *c, *tc;
 
 	for(c = cq->first; c; c = c->next) {
 		int chunk_finished = 0;
+		network_status_t ret;
 
 		switch(c->type) {
-		case MEM_CHUNK: {
-			char * offset;
-			size_t toSend;
-			ssize_t r;
+		case MEM_CHUNK:
+			ret = network_write_chunkqueue_writev_mem(srv, con, sock, cq, c);
 
-			size_t num_chunks, i;
-			struct iovec *chunks;
-			chunk *tc;
-			size_t num_bytes = 0;
-#if defined(_SC_IOV_MAX) /* IRIX, MacOS X, FreeBSD, Solaris, ... */
-			const size_t max_chunks = sysconf(_SC_IOV_MAX);
-#elif defined(IOV_MAX) /* Linux x86 (glibc-2.3.6-3) */
-			const size_t max_chunks = IOV_MAX;
-#elif defined(MAX_IOVEC) /* Linux ia64 (glibc-2.3.3-98.28) */
-			const size_t max_chunks = MAX_IOVEC;
-#elif defined(UIO_MAXIOV) /* Linux x86 (glibc-2.2.5-233) */
-			const size_t max_chunks = UIO_MAXIOV;
-#elif (defined(__FreeBSD__) && __FreeBSD_version < 500000) || defined(__DragonFly__) || defined(__APPLE__) 
-			/* - FreeBSD 4.x
-			 * - MacOS X 10.3.x
-			 *   (covered in -DKERNEL)
-			 *  */
-			const size_t max_chunks = 1024; /* UIO_MAXIOV value from sys/uio.h */
-#else
-#error "sysconf() doesnt return _SC_IOV_MAX ..., check the output of 'man writev' for the EINVAL error and send the output to jan@kneschke.de"
-#endif
-
-			/* we can't send more then SSIZE_MAX bytes in one chunk */
-
-			/* build writev list
-			 *
-			 * 1. limit: num_chunks < max_chunks
-			 * 2. limit: num_bytes < SSIZE_MAX
-			 */
-			for (num_chunks = 0, tc = c; tc && tc->type == MEM_CHUNK && num_chunks < max_chunks; num_chunks++, tc = tc->next);
-
-			chunks = calloc(num_chunks, sizeof(*chunks));
-
-			for(tc = c, i = 0; i < num_chunks; tc = tc->next, i++) {
-				if (tc->mem->used == 0) {
-					chunks[i].iov_base = tc->mem->ptr;
-					chunks[i].iov_len  = 0;
+			/* check which chunks are finished now */
+			for (tc = c; tc && chunk_is_done(tc); tc = tc->next) {
+				/* skip the first c->next as that will be done by the c = c->next in the other for()-loop */
+				if (chunk_finished) {
+					c = c->next;
 				} else {
-					offset = tc->mem->ptr + tc->offset;
-					toSend = tc->mem->used - 1 - tc->offset;
-
-					chunks[i].iov_base = offset;
-
-					/* protect the return value of writev() */
-					if (toSend > SSIZE_MAX ||
-					    num_bytes + toSend > SSIZE_MAX) {
-						chunks[i].iov_len = SSIZE_MAX - num_bytes;
-
-						num_chunks = i + 1;
-						break;
-					} else {
-						chunks[i].iov_len = toSend;
-					}
-
-					num_bytes += toSend;
+					chunk_finished = 1;
 				}
 			}
 
-			if ((r = writev(fd, chunks, num_chunks)) < 0) {
-				switch (errno) {
-				case EAGAIN:
-				case EINTR:
-					r = 0;
-					break;
-				case EPIPE:
-				case ECONNRESET:
-					free(chunks);
-					return -2;
-				default:
-					log_error_write(srv, __FILE__, __LINE__, "ssd",
-							"writev failed:", strerror(errno), fd);
-
-					free(chunks);
-					return -1;
-				}
+			if (ret != NETWORK_STATUS_SUCCESS) {
+				return ret;
 			}
-
-			cq->bytes_out += r;
-
-			/* check which chunks have been written */
-
-			for(i = 0, tc = c; i < num_chunks; i++, tc = tc->next) {
-				if (r >= (ssize_t)chunks[i].iov_len) {
-					/* written */
-					r -= chunks[i].iov_len;
-					tc->offset += chunks[i].iov_len;
-
-					if (chunk_finished) {
-						/* skip the chunks from further touches */
-						chunks_written++;
-						c = c->next;
-					} else {
-						/* chunks_written + c = c->next is done in the for()*/
-						chunk_finished++;
-					}
-				} else {
-					/* partially written */
-
-					tc->offset += r;
-					chunk_finished = 0;
-
-					break;
-				}
-			}
-			free(chunks);
 
 			break;
-		}
 		case FILE_CHUNK: {
 			ssize_t r;
 			off_t abs_offset;
@@ -166,7 +181,7 @@ int network_write_chunkqueue_writev(server *srv, connection *con, int fd, chunkq
 			if (HANDLER_ERROR == stat_cache_get_entry(srv, con, c->file.name, &sce)) {
 				log_error_write(srv, __FILE__, __LINE__, "sb",
 						strerror(errno), c->file.name);
-				return -1;
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
 
 			abs_offset = c->file.start + c->offset;
@@ -175,7 +190,7 @@ int network_write_chunkqueue_writev(server *srv, connection *con, int fd, chunkq
 				log_error_write(srv, __FILE__, __LINE__, "sb",
 						"file was shrinked:", c->file.name);
 
-				return -1;
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
 
 			/* mmap the buffer
@@ -233,10 +248,10 @@ int network_write_chunkqueue_writev(server *srv, connection *con, int fd, chunkq
 				}
 
 				if (-1 == c->file.fd) {  /* open the file if not already open */
-					if (-1 == (c->file.fd = open(c->file.name->ptr, O_RDONLY))) {
+					if (-1 == (c->file.fd = open(c->file.name->ptr, O_RDONLY | (srv->srvconf.use_noatime ? O_NOATIME : 0) ))) {
 						log_error_write(srv, __FILE__, __LINE__, "sbs", "open failed for:", c->file.name, strerror(errno));
 
-						return -1;
+						return NETWORK_STATUS_FATAL_ERROR;
 					}
 #ifdef FD_CLOEXEC
 					fcntl(c->file.fd, F_SETFD, FD_CLOEXEC);
@@ -249,7 +264,7 @@ int network_write_chunkqueue_writev(server *srv, connection *con, int fd, chunkq
 					log_error_write(srv, __FILE__, __LINE__, "ssbd", "mmap failed:",
 							strerror(errno), c->file.name, c->file.fd);
 
-					return -1;
+					return NETWORK_STATUS_FATAL_ERROR;
 				}
 
 				c->file.mmap.length = to_mmap;
@@ -290,20 +305,19 @@ int network_write_chunkqueue_writev(server *srv, connection *con, int fd, chunkq
 			start = c->file.mmap.start;
 #endif
 
-			if ((r = write(fd, start + (abs_offset - c->file.mmap.offset), toSend)) < 0) {
+			if ((r = write(sock->fd, start + (abs_offset - c->file.mmap.offset), toSend)) < 0) {
 				switch (errno) {
 				case EAGAIN:
 				case EINTR:
-					r = 0;
-					break;
+					return NETWORK_STATUS_WAIT_FOR_EVENT;
 				case EPIPE:
 				case ECONNRESET:
-					return -2;
+					return NETWORK_STATUS_CONNECTION_CLOSE;
 				default:
 					log_error_write(srv, __FILE__, __LINE__, "ssd",
-							"write failed:", strerror(errno), fd);
+							"write failed:", strerror(errno), sock->fd);
 
-					return -1;
+					return NETWORK_STATUS_FATAL_ERROR;
 				}
 			}
 
@@ -326,19 +340,17 @@ int network_write_chunkqueue_writev(server *srv, connection *con, int fd, chunkq
 
 			log_error_write(srv, __FILE__, __LINE__, "ds", c, "type not known");
 
-			return -1;
+			return NETWORK_STATUS_FATAL_ERROR;
 		}
 
 		if (!chunk_finished) {
 			/* not finished yet */
 
-			break;
+			return NETWORK_STATUS_WAIT_FOR_EVENT;
 		}
-
-		chunks_written++;
 	}
 
-	return chunks_written;
+	return NETWORK_STATUS_SUCCESS;
 }
 
 #endif

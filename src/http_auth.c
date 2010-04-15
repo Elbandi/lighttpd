@@ -1,15 +1,11 @@
-#include "server.h"
-#include "log.h"
-#include "http_auth.h"
-#include "http_auth_digest.h"
-#include "inet_ntop_cache.h"
-#include "stream.h"
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 #ifdef HAVE_CRYPT_H
 # include <crypt.h>
 #elif defined(__linux__)
 /* linux needs _XOPEN_SOURCE */
-# define _XOPEN_SOURCE
 #endif
 
 #ifdef HAVE_LIBCRYPT
@@ -25,8 +21,16 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
-#include <unistd.h>
 #include <ctype.h>
+
+#include "server.h"
+#include "log.h"
+#include "http_auth.h"
+#include "http_auth_digest.h"
+#include "stream.h"
+
+#include "sys-strings.h"
+#include "sys-files.h"
 
 #ifdef USE_OPENSSL
 # include <openssl/md5.h>
@@ -50,6 +54,9 @@
  */
 
 handler_t auth_ldap_init(server *srv, mod_auth_plugin_config *s);
+#ifdef USE_LDAP
+void auth_ldap_cleanup(ldap_plugin_config *p);
+#endif
 
 static const char base64_pad = '=';
 
@@ -320,10 +327,10 @@ static int http_auth_match_rules(server *srv, mod_auth_plugin_data *p, const cha
 
 	req = ((data_array *)(p->conf.auth_require->data[i]))->value;
 
-	require = (data_string *)array_get_element(req, "require");
+	require = (data_string *)array_get_element(req, CONST_STR_LEN("require"));
 
 	/* if we get here, the user we got a authed user */
-	if (0 == strcmp(require->value->ptr, "valid-user")) {
+	if (buffer_is_equal_string(require->value, CONST_STR_LEN("valid-user"))) {
 		return 0;
 	}
 
@@ -486,25 +493,25 @@ static void apr_md5_encode(const char *pw, const char *salt, char *result, size_
     /*
      * The password first, since that is what is most unknown
      */
-    MD5_Update(&ctx, pw, strlen(pw));
+    MD5_Update(&ctx, (const unsigned char*) pw, strlen(pw));
 
     /*
      * Then our magic string
      */
-    MD5_Update(&ctx, APR1_ID, strlen(APR1_ID));
+    MD5_Update(&ctx, (const unsigned char*) APR1_ID, strlen(APR1_ID));
 
     /*
      * Then the raw salt
      */
-    MD5_Update(&ctx, sp, sl);
+    MD5_Update(&ctx, (const unsigned char*) sp, sl);
 
     /*
      * Then just as many characters of the MD5(pw, salt, pw)
      */
     MD5_Init(&ctx1);
-    MD5_Update(&ctx1, pw, strlen(pw));
-    MD5_Update(&ctx1, sp, sl);
-    MD5_Update(&ctx1, pw, strlen(pw));
+    MD5_Update(&ctx1, (const unsigned char*) pw, strlen(pw));
+    MD5_Update(&ctx1, (const unsigned char*) sp, sl);
+    MD5_Update(&ctx1, (const unsigned char*) pw, strlen(pw));
     MD5_Final(final, &ctx1);
     for (pl = strlen(pw); pl > 0; pl -= APR_MD5_DIGESTSIZE) {
         MD5_Update(&ctx, final,
@@ -524,7 +531,7 @@ static void apr_md5_encode(const char *pw, const char *salt, char *result, size_
             MD5_Update(&ctx, final, 1);
         }
         else {
-            MD5_Update(&ctx, pw, 1);
+            MD5_Update(&ctx, (const unsigned char*) pw, 1);
         }
     }
 
@@ -546,24 +553,24 @@ static void apr_md5_encode(const char *pw, const char *salt, char *result, size_
     for (i = 0; i < 1000; i++) {
         MD5_Init(&ctx1);
         if (i & 1) {
-            MD5_Update(&ctx1, pw, strlen(pw));
+            MD5_Update(&ctx1, (const unsigned char*) pw, strlen(pw));
         }
         else {
             MD5_Update(&ctx1, final, APR_MD5_DIGESTSIZE);
         }
         if (i % 3) {
-            MD5_Update(&ctx1, sp, sl);
+            MD5_Update(&ctx1, (const unsigned char*) sp, sl);
         }
 
         if (i % 7) {
-            MD5_Update(&ctx1, pw, strlen(pw));
+            MD5_Update(&ctx1, (const unsigned char*) pw, strlen(pw));
         }
 
         if (i & 1) {
             MD5_Update(&ctx1, final, APR_MD5_DIGESTSIZE);
         }
         else {
-            MD5_Update(&ctx1, pw, strlen(pw));
+            MD5_Update(&ctx1, (const unsigned char*) pw, strlen(pw));
         }
         MD5_Final(final,&ctx1);
     }
@@ -622,7 +629,7 @@ static int http_auth_basic_password_compare(server *srv, mod_auth_plugin_data *p
 
 		CvtHex(HA1, a1);
 
-		if (0 == strcmp(password->ptr, a1)) {
+		if (buffer_is_equal_string(password, a1, strlen(a1))) {
 			return 0;
 		}
 	} else if (p->conf.auth_backend == AUTH_BACKEND_HTPASSWD) {
@@ -682,7 +689,7 @@ static int http_auth_basic_password_compare(server *srv, mod_auth_plugin_data *p
 
 		crypted = crypt(pw, salt);
 
-		if (0 == strcmp(password->ptr, crypted)) {
+		if (buffer_is_equal_string(password, crypted, strlen(crypted))) {
 			return 0;
 		} else {
 			fprintf(stderr, "%s.%d\n", __FILE__, __LINE__);
@@ -691,17 +698,18 @@ static int http_auth_basic_password_compare(server *srv, mod_auth_plugin_data *p
 #endif
 	}
 	} else if (p->conf.auth_backend == AUTH_BACKEND_PLAIN) {
-		if (0 == strcmp(password->ptr, pw)) {
+		if (buffer_is_equal_string(password, pw, strlen(pw))) {
 			return 0;
 		}
 	} else if (p->conf.auth_backend == AUTH_BACKEND_LDAP) {
 #ifdef USE_LDAP
-		LDAP *ldap;
-		LDAPMessage *lm, *first;
-		char *dn;
-		int ret;
+		LDAP *ldap = NULL;
+		LDAPMessage *lm = NULL, *first = NULL;
+		struct berval credentials;
+		char *dn = NULL;
+		int ret = 0;
 		char *attrs[] = { LDAP_NO_ATTRS, NULL };
-		size_t i;
+		size_t i = 0;
 
 		/* for now we stay synchronous */
 
@@ -741,42 +749,59 @@ static int http_auth_basic_password_compare(server *srv, mod_auth_plugin_data *p
 		if (p->conf.auth_ldap_allow_empty_pw != 1 && pw[0] == '\0')
 			return -1;
 
-		/* build filter */
-		buffer_copy_string_buffer(p->ldap_filter, p->conf.ldap_filter_pre);
-		buffer_append_string_buffer(p->ldap_filter, username);
-		buffer_append_string_buffer(p->ldap_filter, p->conf.ldap_filter_post);
-
-
 		/* 2. */
-		if (p->anon_conf->ldap == NULL ||
-		    LDAP_SUCCESS != (ret = ldap_search_s(p->anon_conf->ldap, p->conf.auth_ldap_basedn->ptr, LDAP_SCOPE_SUBTREE, p->ldap_filter->ptr, attrs, 0, &lm))) {
 
-			/* try again; the ldap library sometimes fails for the first call but reconnects */
-			if (p->anon_conf->ldap == NULL || ret != LDAP_SERVER_DOWN ||
-			    LDAP_SUCCESS != (ret = ldap_search_s(p->anon_conf->ldap, p->conf.auth_ldap_basedn->ptr, LDAP_SCOPE_SUBTREE, p->ldap_filter->ptr, attrs, 0, &lm))) {
-
-				if (auth_ldap_init(srv, p->anon_conf) != HANDLER_GO_ON)
-					return -1;
-
-				if (p->anon_conf->ldap == NULL ||
-				    LDAP_SUCCESS != (ret = ldap_search_s(p->anon_conf->ldap, p->conf.auth_ldap_basedn->ptr, LDAP_SCOPE_SUBTREE, p->ldap_filter->ptr, attrs, 0, &lm))) {
-					log_error_write(srv, __FILE__, __LINE__, "sssb",
-							"ldap:", ldap_err2string(ret), "filter:", p->ldap_filter);
-					return -1;
-				}
-			}
+		if (p->conf.ldap->ldap == NULL) {
+			if(auth_ldap_init(srv, &p->conf) != HANDLER_GO_ON)
+				return -1;
 		}
 
-		if (NULL == (first = ldap_first_entry(p->anon_conf->ldap, lm))) {
-			log_error_write(srv, __FILE__, __LINE__, "s", "ldap ...");
+		/* build filter */
+		buffer_copy_string_buffer(p->ldap_filter, p->conf.ldap->ldap_filter_pre);
+		buffer_append_string_buffer(p->ldap_filter, username);
+		buffer_append_string_buffer(p->ldap_filter, p->conf.ldap->ldap_filter_post);
+
+		ret = ldap_search_ext_s(p->conf.ldap->ldap, p->conf.auth_ldap_basedn->ptr, LDAP_SCOPE_SUBTREE, p->ldap_filter->ptr, attrs, 0, NULL, NULL, NULL, 0, &lm);
+
+		if (ret == LDAP_SERVER_DOWN) {
+			log_error_write(srv, __FILE__, __LINE__, "s",
+				"ldap: server down, try to reconnect");
+
+			auth_ldap_cleanup(p->conf.ldap);
+
+			if(auth_ldap_init(srv, &p->conf) != HANDLER_GO_ON)
+				return -1;
+
+			log_error_write(srv, __FILE__, __LINE__, "s",
+				"ldap: successfully reconnected");
+		}
+
+		if (ret != LDAP_SUCCESS) {
+			log_error_write(srv, __FILE__, __LINE__, "sssb",
+					"ldap:", ldap_err2string(ret), ", filter:", p->ldap_filter);
+
+			return -1;
+		}
+
+		if (ldap_count_entries(p->conf.ldap->ldap, lm) > 1) {
+			log_error_write(srv, __FILE__, __LINE__, "ssb",
+				"ldap:", "more than one record returned, you might have to refine the filter:", p->ldap_filter);
+		}
+
+		first = ldap_first_entry(p->conf.ldap->ldap, lm);
+		if (first == NULL) {
+			ldap_get_option(p->conf.ldap->ldap, LDAP_OPT_ERROR_NUMBER, &ret);
+			log_error_write(srv, __FILE__, __LINE__, "ss", "ldap:", ldap_err2string(ret));
 
 			ldap_msgfree(lm);
 
 			return -1;
 		}
 
-		if (NULL == (dn = ldap_get_dn(p->anon_conf->ldap, first))) {
-			log_error_write(srv, __FILE__, __LINE__, "s", "ldap ...");
+		dn = ldap_get_dn(p->conf.ldap->ldap, first);
+		if (dn == NULL) {
+			ldap_get_option(p->conf.ldap->ldap, LDAP_OPT_ERROR_NUMBER, &ret);
+			log_error_write(srv, __FILE__, __LINE__, "ss", "ldap:", ldap_err2string(ret));
 
 			ldap_msgfree(lm);
 
@@ -785,43 +810,64 @@ static int http_auth_basic_password_compare(server *srv, mod_auth_plugin_data *p
 
 		ldap_msgfree(lm);
 
-
 		/* 3. */
-		if (NULL == (ldap = ldap_init(p->conf.auth_ldap_hostname->ptr, LDAP_PORT))) {
-			log_error_write(srv, __FILE__, __LINE__, "ss", "ldap ...", strerror(errno));
+		ret = ldap_initialize(&ldap, p->conf.auth_ldap_url->ptr);
+		if (ret) {
+			log_error_write(srv, __FILE__, __LINE__, "ss", "ldap:", ldap_err2string(ret));
+
+			ldap_memfree(dn);
+
 			return -1;
 		}
 
-		ret = LDAP_VERSION3;
-		if (LDAP_OPT_SUCCESS != (ret = ldap_set_option(ldap, LDAP_OPT_PROTOCOL_VERSION, &ret))) {
+		{
+			const int ldap_version = LDAP_VERSION3;
+			ret = ldap_set_option(ldap, LDAP_OPT_PROTOCOL_VERSION, &ldap_version);
+		}
+		if (ret != LDAP_OPT_SUCCESS) {
 			log_error_write(srv, __FILE__, __LINE__, "ss", "ldap:", ldap_err2string(ret));
 
-			ldap_unbind_s(ldap);
+			ldap_memfree(ldap);
+			ldap_memfree(dn);
 
 			return -1;
 		}
 
 		if (p->conf.auth_ldap_starttls == 1) {
-	 		if (LDAP_OPT_SUCCESS != (ret = ldap_start_tls_s(ldap, NULL,  NULL))) {
+			ret = ldap_start_tls_s(ldap, NULL,  NULL);
+	 		if (ret != LDAP_OPT_SUCCESS) {
 	 			log_error_write(srv, __FILE__, __LINE__, "ss", "ldap startTLS failed:", ldap_err2string(ret));
 
-				ldap_unbind_s(ldap);
+				ldap_memfree(ldap);
+				ldap_memfree(dn);
 
 				return -1;
 	 		}
  		}
 
+		/* Don't initialize it using " = {...}" since upstream doesn't
+ 		 * guarantee an order and the compiler only issues a warning when
+		 * passing an int as the pointer and vice-versa.
+		 * We have to cast away the const since berval is a general struct,
+		 * but ldap_sasl_bind_s doesn't write to the *pw location
+		 */
+		credentials.bv_val = (char*)pw;
+		credentials.bv_len = strlen(pw);
 
-		if (LDAP_SUCCESS != (ret = ldap_simple_bind_s(ldap, dn, pw))) {
+		/* TODO: add funtionality to specify LDAP_SASL_EXTERNAL (or GSS-SPNEGO, etc.) */
+		ret = ldap_sasl_bind_s(ldap, dn, LDAP_SASL_SIMPLE, &credentials, NULL, NULL, NULL);
+		if (ret != LDAP_SUCCESS) {
 			log_error_write(srv, __FILE__, __LINE__, "ss", "ldap:", ldap_err2string(ret));
 
-			ldap_unbind_s(ldap);
+			ldap_memfree(ldap);
+			ldap_memfree(dn);
 
 			return -1;
 		}
 
 		/* 5. */
-		ldap_unbind_s(ldap);
+		ldap_unbind_ext_s(ldap, NULL, NULL);
+		ldap_memfree(dn);
 
 		/* everything worked, good, access granted */
 
@@ -837,9 +883,10 @@ int http_auth_basic_check(server *srv, connection *con, mod_auth_plugin_data *p,
 
 	data_string *realm;
 
-	realm = (data_string *)array_get_element(req, "realm");
+	realm = (data_string *)array_get_element(req, CONST_STR_LEN("realm"));
 
 	username = buffer_init();
+	password = buffer_init();
 
 	if (!base64_decode(username, realm_str)) {
 		log_error_write(srv, __FILE__, __LINE__, "sb", "decodeing base64-string failed", username);
@@ -860,24 +907,19 @@ int http_auth_basic_check(server *srv, connection *con, mod_auth_plugin_data *p,
 
 	username->used = pw - username->ptr;
 
-	password = buffer_init();
 	/* copy password to r1 */
 	if (http_auth_get_password(srv, p, username, realm->value, password)) {
 		buffer_free(username);
 		buffer_free(password);
 
-		if (AUTH_BACKEND_UNSET == p->conf.auth_backend) {
-			log_error_write(srv, __FILE__, __LINE__, "s", "auth.backend is not set");
-		} else {
-			log_error_write(srv, __FILE__, __LINE__, "s", "get_password failed");
-		}
+		log_error_write(srv, __FILE__, __LINE__, "s", "get_password failed");
 
 		return 0;
 	}
 
 	/* password doesn't match */
 	if (http_auth_basic_password_compare(srv, p, req, username, realm->value, password, pw)) {
-		log_error_write(srv, __FILE__, __LINE__, "sbbss", "password doesn't match for ", con->uri.path, username, ", IP:", inet_ntop_cache_get_ip(srv, &(con->dst_addr)));
+		log_error_write(srv, __FILE__, __LINE__, "sbb", "password doesn't match for", con->uri.path, username);
 
 		buffer_free(username);
 		buffer_free(password);
@@ -914,15 +956,15 @@ int http_auth_digest_check(server *srv, connection *con, mod_auth_plugin_data *p
 	char a1[256];
 	char a2[256];
 
-	char *username = NULL;
-	char *realm = NULL;
-	char *nonce = NULL;
-	char *uri = NULL;
-	char *algorithm = NULL;
-	char *qop = NULL;
-	char *cnonce = NULL;
-	char *nc = NULL;
-	char *respons = NULL;
+	char *username;
+	char *realm;
+	char *nonce;
+	char *uri;
+	char *algorithm;
+	char *qop;
+	char *cnonce;
+	char *nc;
+	char *respons;
 
 	char *e, *c;
 	const char *m = NULL;
@@ -963,8 +1005,14 @@ int http_auth_digest_check(server *srv, connection *con, mod_auth_plugin_data *p
 	dkv[6].ptr = &cnonce;
 	dkv[7].ptr = &nc;
 	dkv[8].ptr = &respons;
+	dkv[9].ptr = NULL;
 
 	UNUSED(req);
+
+	for (i = 0; dkv[i].key; i++) {
+		*(dkv[i].ptr) = NULL;
+	}
+
 
 	if (p->conf.auth_backend != AUTH_BACKEND_HTDIGEST &&
 	    p->conf.auth_backend != AUTH_BACKEND_PLAIN) {
@@ -1082,7 +1130,7 @@ int http_auth_digest_check(server *srv, connection *con, mod_auth_plugin_data *p
 		}
 	} else {
 		/* we already check that above */
-		SEGFAULT();
+		SEGFAULT("p->conf.auth_backend is %d", p->conf.auth_backend);
 	}
 
 	buffer_free(password);
@@ -1139,7 +1187,7 @@ int http_auth_digest_check(server *srv, connection *con, mod_auth_plugin_data *p
 		}
 
 		log_error_write(srv, __FILE__, __LINE__, "sss",
-				"digest: auth failed for ", username, ": wrong password, IP:", inet_ntop_cache_get_ip(srv, &(con->dst_addr)));
+				"digest: auth failed for", username, "wrong password");
 
 		buffer_free(b);
 		return 0;

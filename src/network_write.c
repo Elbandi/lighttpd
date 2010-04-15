@@ -1,4 +1,11 @@
-#include "network_backends.h"
+#include <sys/types.h>
+#include <sys/stat.h>
+
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
 
 #include "network.h"
 #include "fdevent.h"
@@ -6,27 +13,85 @@
 #include "stat_cache.h"
 
 #include "sys-socket.h"
+#include "sys-files.h"
 
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
+#include "network_backends.h"
+
+#ifdef USE_WRITE
 
 #ifdef HAVE_SYS_FILIO_H
 # include <sys/filio.h>
 #endif
 
 #ifdef HAVE_SYS_RESOURCE_H
-# include <sys/resource.h>
+#include <sys/resource.h>
 #endif
 
-int network_write_chunkqueue_write(server *srv, connection *con, int fd, chunkqueue *cq) {
+
+/**
+* fill the chunkqueue will all the data that we can get
+*
+* this might be optimized into a readv() which uses the chunks
+* as vectors
+*/
+NETWORK_BACKEND_READ(read) {
+	int toread;
+	buffer *b;
+	off_t r, start_bytes_in;
+	off_t max_read = 256 * 1024;
+
+	/**
+	 * a EAGAIN is a successful read if we already read something to the chunkqueue
+	 */
+	int read_something = 0;
+
+	UNUSED(srv);
+	UNUSED(con);
+
+	start_bytes_in = cq->bytes_in;
+
+	/* use a chunk-size of 16k */
+	do {
+		toread = 16384;
+
+		b = chunkqueue_get_append_buffer(cq);
+
+		buffer_prepare_copy(b, toread);
+
+		if (-1 == (r = read(sock->fd, b->ptr, toread))) {
+			switch (errno) {
+			case EAGAIN:
+				/* remove the last chunk from the chunkqueue */
+				chunkqueue_remove_empty_last_chunk(cq);
+				return read_something ? NETWORK_STATUS_SUCCESS : NETWORK_STATUS_WAIT_FOR_EVENT;
+			case ECONNRESET:
+				return NETWORK_STATUS_CONNECTION_CLOSE;
+			default:
+				ERROR("oops, read from fd=%d failed: %s (%d)", sock->fd, strerror(errno), errno );
+
+				return NETWORK_STATUS_FATAL_ERROR;
+			}
+		}
+
+		if (r == 0) {
+			chunkqueue_remove_empty_last_chunk(cq);
+			return read_something ? NETWORK_STATUS_SUCCESS : NETWORK_STATUS_CONNECTION_CLOSE;
+		}
+
+		read_something = 1;
+
+		b->used = r;
+		b->ptr[b->used++] = '\0';
+		cq->bytes_in += r;
+
+		if (cq->bytes_in - start_bytes_in > max_read) break;
+	} while (r == toread);
+
+	return NETWORK_STATUS_SUCCESS;
+}
+
+NETWORK_BACKEND_WRITE(write) {
 	chunk *c;
-	size_t chunks_written = 0;
 
 	for(c = cq->first; c; c = c->next) {
 		int chunk_finished = 0;
@@ -44,31 +109,12 @@ int network_write_chunkqueue_write(server *srv, connection *con, int fd, chunkqu
 
 			offset = c->mem->ptr + c->offset;
 			toSend = c->mem->used - 1 - c->offset;
-#ifdef __WIN32
-			if ((r = send(fd, offset, toSend, 0)) < 0) {
-				/* no error handling for windows... */
-				log_error_write(srv, __FILE__, __LINE__, "ssd", "send failed: ", strerror(errno), fd);
 
-				return -1;
-			}
-#else
-			if ((r = write(fd, offset, toSend)) < 0) {
-				switch (errno) {
-				case EAGAIN:
-				case EINTR:
-					r = 0;
-					break;
-				case EPIPE:
-				case ECONNRESET:
-					return -2;
-				default:
-					log_error_write(srv, __FILE__, __LINE__, "ssd",
-						"write failed:", strerror(errno), fd);
+			if ((r = write(sock->fd, offset, toSend)) < 0) {
+				log_error_write(srv, __FILE__, __LINE__, "ssd", "write failed: ", strerror(errno), sock->fd);
 
-					return -1;
-				}
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
-#endif
 
 			c->offset += r;
 			cq->bytes_out += r;
@@ -92,7 +138,7 @@ int network_write_chunkqueue_write(server *srv, connection *con, int fd, chunkqu
 			if (HANDLER_ERROR == stat_cache_get_entry(srv, con, c->file.name, &sce)) {
 				log_error_write(srv, __FILE__, __LINE__, "sb",
 						strerror(errno), c->file.name);
-				return -1;
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
 
 			offset = c->file.start + c->offset;
@@ -101,46 +147,33 @@ int network_write_chunkqueue_write(server *srv, connection *con, int fd, chunkqu
 			if (offset > sce->st.st_size) {
 				log_error_write(srv, __FILE__, __LINE__, "sb", "file was shrinked:", c->file.name);
 
-				return -1;
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
 
 			if (-1 == (ifd = open(c->file.name->ptr, O_RDONLY))) {
 				log_error_write(srv, __FILE__, __LINE__, "ss", "open failed: ", strerror(errno));
 
-				return -1;
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
 
-#ifdef USE_MMAP
+#if defined USE_MMAP
 			if (MAP_FAILED == (p = mmap(0, sce->st.st_size, PROT_READ, MAP_SHARED, ifd, 0))) {
 				log_error_write(srv, __FILE__, __LINE__, "ss", "mmap failed: ", strerror(errno));
 
 				close(ifd);
 
-				return -1;
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
 			close(ifd);
 
-			if ((r = write(fd, p + offset, toSend)) <= 0) {
-				switch (errno) {
-				case EAGAIN:
-				case EINTR:
-					r = 0;
-					break;
-				case EPIPE:
-				case ECONNRESET:
-					munmap(p, sce->st.st_size);
-					return -2;
-				default:
-					log_error_write(srv, __FILE__, __LINE__, "ssd",
-						"write failed:", strerror(errno), fd);
-					munmap(p, sce->st.st_size);
-
-					return -1;
-				}
+			if ((r = write(sock->fd, p + offset, toSend)) <= 0) {
+				log_error_write(srv, __FILE__, __LINE__, "ss", "write failed: ", strerror(errno));
+				munmap(p, sce->st.st_size);
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
 
 			munmap(p, sce->st.st_size);
-#else /* USE_MMAP */
+#else
 			buffer_prepare_copy(srv->tmp_buf, toSend);
 
 			lseek(ifd, offset, SEEK_SET);
@@ -148,37 +181,16 @@ int network_write_chunkqueue_write(server *srv, connection *con, int fd, chunkqu
 				log_error_write(srv, __FILE__, __LINE__, "ss", "read: ", strerror(errno));
 				close(ifd);
 
-				return -1;
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
 			close(ifd);
 
-#ifdef __WIN32
-			if ((r = send(fd, srv->tmp_buf->ptr, toSend, 0)) < 0) {
-				/* no error handling for windows... */
-				log_error_write(srv, __FILE__, __LINE__, "ssd", "send failed: ", strerror(errno), fd);
+			if (-1 == (r = send(sock->fd, srv->tmp_buf->ptr, toSend, 0))) {
+				log_error_write(srv, __FILE__, __LINE__, "ss", "write: ", strerror(errno));
 
-				return -1;
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
-#else /* __WIN32 */
-			if ((r = write(fd, srv->tmp_buf->ptr, toSend)) < 0) {
-				switch (errno) {
-				case EAGAIN:
-				case EINTR:
-					r = 0;
-					break;
-				case EPIPE:
-				case ECONNRESET:
-					return -2;
-				default:
-					log_error_write(srv, __FILE__, __LINE__, "ssd",
-						"write failed:", strerror(errno), fd);
-
-					return -1;
-				}
-			}
-#endif /* __WIN32 */
-#endif /* USE_MMAP */
-
+#endif
 			c->offset += r;
 			cq->bytes_out += r;
 
@@ -192,23 +204,16 @@ int network_write_chunkqueue_write(server *srv, connection *con, int fd, chunkqu
 
 			log_error_write(srv, __FILE__, __LINE__, "ds", c, "type not known");
 
-			return -1;
+			return NETWORK_STATUS_FATAL_ERROR;
 		}
 
 		if (!chunk_finished) {
 			/* not finished yet */
-
-			break;
+			return NETWORK_STATUS_WAIT_FOR_EVENT;
 		}
-
-		chunks_written++;
 	}
 
-	return chunks_written;
+	return NETWORK_STATUS_SUCCESS;
 }
 
-#if 0
-network_write_init(void) {
-	p->write = network_write_write_chunkset;
-}
 #endif

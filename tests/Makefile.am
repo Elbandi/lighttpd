@@ -17,9 +17,6 @@ TESTS=\
 	cleanup.sh
 
 CONFS=fastcgi-10.conf \
-      fastcgi-auth.conf \
-      fastcgi-responder.conf \
-      fastcgi-13.conf \
       bug-06.conf \
       bug-12.conf \
       core-var-include.t \
@@ -31,35 +28,33 @@ CONFS=fastcgi-10.conf \
       core-response.t \
       core-keepalive.t \
       core.t \
-	  mod-proxy.t \
-	  proxy.conf \
-	  mod-secdownload.t \
       mod-access.t \
       mod-auth.t \
       mod-cgi.t \
       mod-compress.t \
       mod-compress.conf \
-      mod-fastcgi.t \
+      fastcgi.t \
       mod-redirect.t \
-      mod-rewrite.t \
       mod-userdir.t \
-	  symlink.t \
+      mod-rewrite.t \
       request.t \
       mod-ssi.t \
       LightyTest.pm \
       mod-setenv.t \
       lowercase.t \
       lowercase.conf \
+      proxy.conf \
       cachable.t \
-      core-404-handler.t \
-      404-handler.conf
+      default.conf \
+      proxy-backend-1.conf \
+      proxy-backend-2.conf 
 
-TESTS_ENVIRONMENT=$(srcdir)/wrapper.sh $(srcdir) $(top_builddir)
+
+TESTS_ENVIRONMENT=$(srcdir)/wrapper.sh $(srcdir) $(top_builddir) 
 
 EXTRA_DIST=wrapper.sh lighttpd.conf \
 	lighttpd.user \
 	lighttpd.htpasswd \
-	SConscript \
 	$(CONFS) \
 	$(TESTS)
 
@@ -69,7 +64,7 @@ leak-check:
 	for i in $(TESTS); do \
 		$(srcdir)/$$i; \
 		echo $$?; \
-	done
+	done 
 
 clean-local:
 	rm -f *.out

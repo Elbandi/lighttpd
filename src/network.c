@@ -1,25 +1,25 @@
+#include <sys/types.h>
+#include <sys/stat.h>
+
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
+
+#include <stdio.h>
+
 #include "network.h"
 #include "fdevent.h"
 #include "log.h"
 #include "connections.h"
 #include "plugin.h"
 #include "joblist.h"
-#include "configfile.h"
 
 #include "network_backends.h"
 #include "sys-mmap.h"
 #include "sys-socket.h"
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <assert.h>
+#include "sys-files.h"
 
 #ifdef USE_OPENSSL
 # include <openssl/ssl.h>
@@ -27,7 +27,174 @@
 # include <openssl/rand.h>
 #endif
 
-static handler_t network_server_handle_fdevent(void *s, void *context, int revents) {
+#define BACKEND_HANDLERS(read, write) network_read_chunkqueue_##read, network_write_chunkqueue_##write
+static network_backend_info_t network_backends[] = {
+	/* lowest id wins */
+	{
+		NETWORK_BACKEND_LINUX_SENDFILE,
+		"linux-sendfile",
+		NULL,
+#if defined USE_WRITE && defined USE_LINUX_SENDFILE
+		BACKEND_HANDLERS(read, linuxsendfile)
+#else
+		NULL, NULL
+#endif
+	},
+	{
+		NETWORK_BACKEND_LINUX_AIO_SENDFILE,
+		"linux-aio-sendfile",
+		NULL,
+#if defined USE_WRITE && defined USE_LINUX_AIO_SENDFILE
+		BACKEND_HANDLERS(read, linuxaiosendfile)
+#else
+		NULL, NULL
+#endif
+	},
+	{
+		NETWORK_BACKEND_FREEBSD_SENDFILE,
+		"freebsd-sendfile",
+		NULL,
+#if defined USE_WRITE && defined USE_FREEBSD_SENDFILE
+		BACKEND_HANDLERS(read, freebsdsendfile)
+#else
+		NULL, NULL
+#endif
+	},
+	{
+		NETWORK_BACKEND_SOLARIS_SENDFILEV,
+		"solaris-sendfilev",
+		NULL,
+#if defined USE_WRITE && defined USE_SOLARIS_SENDFILEV
+		BACKEND_HANDLERS(read, solarissendfilev)
+#else
+		NULL, NULL
+#endif
+	},
+	{
+		NETWORK_BACKEND_POSIX_AIO,
+		"posix-aio",
+		NULL,
+#if defined USE_WRITE && defined USE_POSIX_AIO
+		BACKEND_HANDLERS(read, posixaio)
+#else
+		NULL, NULL
+#endif
+	},
+
+	{
+		NETWORK_BACKEND_GTHREAD_AIO,
+		"gthread-aio",
+		NULL,
+#if defined USE_WRITE && defined USE_GTHREAD_AIO
+		BACKEND_HANDLERS(read, gthreadaio)
+#else
+		NULL, NULL
+#endif
+	},
+	{
+		NETWORK_BACKEND_GTHREAD_SENDFILE,
+		"gthread-sendfile",
+		NULL,
+#if defined USE_WRITE && defined USE_GTHREAD_AIO && defined USE_GTHREAD_SENDFILE
+		BACKEND_HANDLERS(read, gthreadsendfile)
+#else
+		NULL, NULL
+#endif
+	},
+
+	{
+		NETWORK_BACKEND_WRITEV,
+		"writev",
+		NULL,
+#if defined USE_WRITE && defined USE_WRITEV
+		BACKEND_HANDLERS(read, writev)
+#else
+		NULL, NULL
+#endif
+	},
+	{
+		NETWORK_BACKEND_WRITE,
+		"write",
+		NULL,
+#if defined USE_WRITE
+		BACKEND_HANDLERS(read, write)
+#else
+		NULL, NULL
+#endif
+	},
+	{
+		NETWORK_BACKEND_WIN32_TRANSMITFILE,
+		"win32-transmitfile",
+		NULL,
+#if defined USE_WIN32_TRANSMITFILE
+		BACKEND_HANDLERS(win32recv, win32transmitfile)
+#else
+		NULL, NULL
+#endif
+	},
+	{
+		NETWORK_BACKEND_WIN32_SEND,
+		"win32-send",
+		NULL,
+#if defined USE_WIN32_SEND && defined USE_WIN32_SEND
+		BACKEND_HANDLERS(win32recv, win32send)
+#else
+		NULL, NULL
+#endif
+	},
+
+	{
+		NETWORK_BACKEND_UNSET,
+		NULL,
+		NULL,
+		NULL, NULL
+	}
+};
+
+const network_backend_info_t *network_get_backends() {
+	return network_backends;
+}
+
+const network_backend_info_t *network_get_defaultbackend() {
+	const network_backend_info_t *backend = network_get_backends();
+
+	while (backend->name) {
+		if (backend->write_handler) {
+			return backend;
+		}
+		backend ++;
+	}
+
+	return NULL;
+}
+
+const network_backend_info_t *network_get_backend_info_by_type(network_backend_t type) {
+	const network_backend_info_t *backend = network_get_backends();
+
+	while (backend->name) {
+		if (type == backend->type) {
+			return backend;
+		}
+		backend ++;
+	}
+
+	return NULL;
+}
+
+const network_backend_info_t *network_get_backend_info_by_name(const char *name) {
+	const network_backend_info_t *backend = network_get_backends();
+
+	while (backend->name) {
+		if (strcmp(name, backend->name) == 0) {
+			return backend;
+		}
+		backend ++;
+	}
+
+	return NULL;
+}
+
+handler_t network_server_handle_fdevent(void *s, void *context, int revents) {
 	server     *srv = (server *)s;
 	server_socket *srv_socket = (server_socket *)context;
 	connection *con;
@@ -38,7 +205,7 @@ static handler_t network_server_handle_fdevent(void *s, void *context, int reven
 	if (revents != FDEVENT_IN) {
 		log_error_write(srv, __FILE__, __LINE__, "sdd",
 				"strange event for server socket",
-				srv_socket->fd,
+				srv_socket->sock->fd,
 				revents);
 		return HANDLER_ERROR;
 	}
@@ -47,65 +214,10 @@ static handler_t network_server_handle_fdevent(void *s, void *context, int reven
 	 *
 	 * we jump out after 100 to give the waiting connections a chance */
 	for (loops = 0; loops < 100 && NULL != (con = connection_accept(srv, srv_socket)); loops++) {
-		handler_t r;
-
-		connection_state_machine(srv, con);
-
-		switch(r = plugins_call_handle_joblist(srv, con)) {
-		case HANDLER_FINISHED:
-		case HANDLER_GO_ON:
-			break;
-		default:
-			log_error_write(srv, __FILE__, __LINE__, "d", r);
-			break;
-		}
+		joblist_append(srv, con);
 	}
 	return HANDLER_GO_ON;
 }
-
-#if defined USE_OPENSSL && ! defined OPENSSL_NO_TLSEXT
-static int network_ssl_servername_callback(SSL *ssl, int *al, server *srv) {
-	const char *servername;
-	connection *con = (connection *) SSL_get_app_data(ssl);
-	UNUSED(al);
-
-	buffer_copy_string(con->uri.scheme, "https");
-
-	if (NULL == (servername = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name))) {
-#if 0
-		/* this "error" just means the client didn't support it */
-		log_error_write(srv, __FILE__, __LINE__, "ss", "SSL:",
-				"failed to get TLS server name");
-#endif
-		return SSL_TLSEXT_ERR_NOACK;
-	}
-	buffer_copy_string(con->tlsext_server_name, servername);
-	buffer_to_lower(con->tlsext_server_name);
-
-	config_cond_cache_reset(srv, con);
-	config_setup_connection(srv, con);
-
-	config_patch_connection(srv, con, COMP_SERVER_SOCKET);
-	config_patch_connection(srv, con, COMP_HTTP_SCHEME);
-	config_patch_connection(srv, con, COMP_HTTP_HOST);
-
-	if (NULL == con->conf.ssl_ctx) {
-		/* ssl_ctx <=> pemfile was set <=> ssl_ctx got patched: so this should never happen */
-		log_error_write(srv, __FILE__, __LINE__, "ssb", "SSL:",
-			"null SSL_CTX for TLS server name", con->tlsext_server_name);
-		return SSL_TLSEXT_ERR_ALERT_FATAL;
-	}
-
-	/* switch to new SSL_CTX in reaction to a client's server_name extension */
-	if (con->conf.ssl_ctx != SSL_set_SSL_CTX(ssl, con->conf.ssl_ctx)) {
-		log_error_write(srv, __FILE__, __LINE__, "ssb", "SSL:",
-			"failed to set SSL_CTX for TLS server name", con->tlsext_server_name);
-		return SSL_TLSEXT_ERR_ALERT_FATAL;
-	}
-
-	return SSL_TLSEXT_ERR_OK;
-}
-#endif
 
 static int network_server_init(server *srv, buffer *host_token, specific_config *s) {
 	int val;
@@ -118,7 +230,11 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 	int is_unix_domain_socket = 0;
 	int fd;
 
-#ifdef __WIN32
+#ifdef SO_ACCEPTFILTER
+	struct accept_filter_arg afa;
+#endif
+
+#ifdef _WIN32
 	WORD wVersionRequested;
 	WSADATA wsaData;
 	int err;
@@ -134,8 +250,7 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 #endif
 
 	srv_socket = calloc(1, sizeof(*srv_socket));
-	srv_socket->fd = -1;
-	srv_socket->fde_ndx = -1;
+	srv_socket->sock = iosocket_init();
 
 	srv_socket->srv_token = buffer_init();
 	buffer_copy_string_buffer(srv_socket->srv_token, host_token);
@@ -149,7 +264,7 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 	if (NULL == (sp = strrchr(b->ptr, ':'))) {
 		log_error_write(srv, __FILE__, __LINE__, "sb", "value of $SERVER[\"socket\"] has to be \"ip:port\".", b);
 
-		goto error_free_socket;
+		return -1;
 	}
 
 	host = b->ptr;
@@ -172,7 +287,7 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 	} else if (port == 0 || port > 65535) {
 		log_error_write(srv, __FILE__, __LINE__, "sd", "port out of range:", port);
 
-		goto error_free_socket;
+		return -1;
 	}
 
 	if (*host == '\0') host = NULL;
@@ -182,14 +297,14 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 
 		srv_socket->addr.plain.sa_family = AF_UNIX;
 
-		if (-1 == (srv_socket->fd = socket(srv_socket->addr.plain.sa_family, SOCK_STREAM, 0))) {
+		if (-1 == (srv_socket->sock->fd = socket(srv_socket->addr.plain.sa_family, SOCK_STREAM, 0))) {
 			log_error_write(srv, __FILE__, __LINE__, "ss", "socket failed:", strerror(errno));
-			goto error_free_socket;
+			return -1;
 		}
 #else
 		log_error_write(srv, __FILE__, __LINE__, "s",
 				"ERROR: Unix Domain sockets are not supported.");
-		goto error_free_socket;
+		return -1;
 #endif
 	}
 
@@ -197,34 +312,26 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 	if (s->use_ipv6) {
 		srv_socket->addr.plain.sa_family = AF_INET6;
 
-		if (-1 == (srv_socket->fd = socket(srv_socket->addr.plain.sa_family, SOCK_STREAM, IPPROTO_TCP))) {
+		if (-1 == (srv_socket->sock->fd = socket(srv_socket->addr.plain.sa_family, SOCK_STREAM, IPPROTO_TCP))) {
 			log_error_write(srv, __FILE__, __LINE__, "ss", "socket failed:", strerror(errno));
-			goto error_free_socket;
+			return -1;
 		}
 		srv_socket->use_ipv6 = 1;
 	}
 #endif
 
-	if (srv_socket->fd == -1) {
+	if (srv_socket->sock->fd == -1) {
 		srv_socket->addr.plain.sa_family = AF_INET;
-		if (-1 == (srv_socket->fd = socket(srv_socket->addr.plain.sa_family, SOCK_STREAM, IPPROTO_TCP))) {
+		if (-1 == (srv_socket->sock->fd = socket(srv_socket->addr.plain.sa_family, SOCK_STREAM, IPPROTO_TCP))) {
 			log_error_write(srv, __FILE__, __LINE__, "ss", "socket failed:", strerror(errno));
-			goto error_free_socket;
+			return -1;
 		}
 	}
 
-#ifdef FD_CLOEXEC
-	/* set FD_CLOEXEC now, fdevent_fcntl_set is called later; needed for pipe-logger forks */
-	fcntl(srv_socket->fd, F_SETFD, FD_CLOEXEC);
-#endif
-
-	/* */
-	srv->cur_fds = srv_socket->fd;
-
 	val = 1;
-	if (setsockopt(srv_socket->fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) < 0) {
+	if (setsockopt(srv_socket->sock->fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) < 0) {
 		log_error_write(srv, __FILE__, __LINE__, "ss", "socketsockopt failed:", strerror(errno));
-		goto error_free_socket;
+		return -1;
 	}
 
 	switch(srv_socket->addr.plain.sa_family) {
@@ -249,7 +356,7 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 						"sssss", "getaddrinfo failed: ",
 						gai_strerror(r), "'", host, "'");
 
-				goto error_free_socket;
+				return -1;
 			}
 
 			memcpy(&(srv_socket->addr), res->ai_addr, res->ai_addrlen);
@@ -271,17 +378,17 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 				log_error_write(srv, __FILE__, __LINE__,
 						"sds", "gethostbyname failed: ",
 						h_errno, host);
-				goto error_free_socket;
+				return -1;
 			}
 
 			if (he->h_addrtype != AF_INET) {
 				log_error_write(srv, __FILE__, __LINE__, "sd", "addr-type != AF_INET: ", he->h_addrtype);
-				goto error_free_socket;
+				return -1;
 			}
 
 			if (he->h_length != sizeof(struct in_addr)) {
 				log_error_write(srv, __FILE__, __LINE__, "sd", "addr-length != sizeof(in_addr): ", he->h_length);
-				goto error_free_socket;
+				return -1;
 			}
 
 			memcpy(&(srv_socket->addr.ipv4.sin_addr.s_addr), he->h_addr_list[0], he->h_length);
@@ -291,6 +398,7 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 		addr_len = sizeof(struct sockaddr_in);
 
 		break;
+#ifndef _WIN32
 	case AF_UNIX:
 		srv_socket->addr.un.sun_family = AF_UNIX;
 		strcpy(srv_socket->addr.un.sun_path, host);
@@ -303,7 +411,7 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 #endif
 
 		/* check if the socket exists and try to connect to it. */
-		if (-1 != (fd = connect(srv_socket->fd, (struct sockaddr *) &(srv_socket->addr), addr_len))) {
+		if (-1 != (fd = connect(srv_socket->sock->fd, (struct sockaddr *) &(srv_socket->addr), addr_len))) {
 			close(fd);
 
 			log_error_write(srv, __FILE__, __LINE__, "ss",
@@ -311,7 +419,7 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 				host);
 
 
-			goto error_free_socket;
+			return -1;
 		}
 
 		/* connect failed */
@@ -326,15 +434,18 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 				"testing socket failed:",
 				host, strerror(errno));
 
-			goto error_free_socket;
+			return -1;
 		}
 
 		break;
+#endif
 	default:
-		goto error_free_socket;
+		addr_len = 0;
+
+		return -1;
 	}
 
-	if (0 != bind(srv_socket->fd, (struct sockaddr *) &(srv_socket->addr), addr_len)) {
+	if (0 != bind(srv_socket->sock->fd, (struct sockaddr *) &(srv_socket->addr), addr_len)) {
 		switch(srv_socket->addr.plain.sa_family) {
 		case AF_UNIX:
 			log_error_write(srv, __FILE__, __LINE__, "sds",
@@ -347,164 +458,16 @@ static int network_server_init(server *srv, buffer *host_token, specific_config 
 					host, port, strerror(errno));
 			break;
 		}
-		goto error_free_socket;
+		return -1;
 	}
 
-	if (-1 == listen(srv_socket->fd, 128 * 8)) {
+	if (-1 == listen(srv_socket->sock->fd, 128 * 8)) {
 		log_error_write(srv, __FILE__, __LINE__, "ss", "listen failed: ", strerror(errno));
-		goto error_free_socket;
+		return -1;
 	}
 
 	if (s->is_ssl) {
 #ifdef USE_OPENSSL
-		if (NULL == (srv_socket->ssl_ctx = s->ssl_ctx)) {
-			log_error_write(srv, __FILE__, __LINE__, "s", "ssl.pemfile has to be set");
-			goto error_free_socket;
-		}
-#else
-
-		buffer_free(srv_socket->srv_token);
-		free(srv_socket);
-
-		buffer_free(b);
-
-		log_error_write(srv, __FILE__, __LINE__, "ss", "SSL:",
-				"ssl requested but openssl support is not compiled in");
-
-		goto error_free_socket;
-#endif
-#ifdef TCP_DEFER_ACCEPT
-	} else if (s->defer_accept) {
-		int v = s->defer_accept;
-		if (-1 == setsockopt(srv_socket->fd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &v, sizeof(v))) {
-			log_error_write(srv, __FILE__, __LINE__, "ss", "can't set TCP_DEFER_ACCEPT: ", strerror(errno));
-		}
-#endif
-	} else {
-#ifdef SO_ACCEPTFILTER
-		/* FreeBSD accf_http filter */
-		struct accept_filter_arg afa;
-		memset(&afa, 0, sizeof(afa));
-		strcpy(afa.af_name, "httpready");
-		if (setsockopt(srv_socket->fd, SOL_SOCKET, SO_ACCEPTFILTER, &afa, sizeof(afa)) < 0) {
-			if (errno != ENOENT) {
-				log_error_write(srv, __FILE__, __LINE__, "ss", "can't set accept-filter 'httpready': ", strerror(errno));
-			}
-		}
-#endif
-	}
-
-	srv_socket->is_ssl = s->is_ssl;
-
-	if (srv->srv_sockets.size == 0) {
-		srv->srv_sockets.size = 4;
-		srv->srv_sockets.used = 0;
-		srv->srv_sockets.ptr = malloc(srv->srv_sockets.size * sizeof(server_socket));
-	} else if (srv->srv_sockets.used == srv->srv_sockets.size) {
-		srv->srv_sockets.size += 4;
-		srv->srv_sockets.ptr = realloc(srv->srv_sockets.ptr, srv->srv_sockets.size * sizeof(server_socket));
-	}
-
-	srv->srv_sockets.ptr[srv->srv_sockets.used++] = srv_socket;
-
-	buffer_free(b);
-
-	return 0;
-
-error_free_socket:
-	if (srv_socket->fd != -1) {
-		/* check if server fd are already registered */
-		if (srv_socket->fde_ndx != -1) {
-			fdevent_event_del(srv->ev, &(srv_socket->fde_ndx), srv_socket->fd);
-			fdevent_unregister(srv->ev, srv_socket->fd);
-		}
-
-		close(srv_socket->fd);
-	}
-	buffer_free(srv_socket->srv_token);
-	free(srv_socket);
-
-	return -1;
-}
-
-int network_close(server *srv) {
-	size_t i;
-	for (i = 0; i < srv->srv_sockets.used; i++) {
-		server_socket *srv_socket = srv->srv_sockets.ptr[i];
-
-		if (srv_socket->fd != -1) {
-			/* check if server fd are already registered */
-			if (srv_socket->fde_ndx != -1) {
-				fdevent_event_del(srv->ev, &(srv_socket->fde_ndx), srv_socket->fd);
-				fdevent_unregister(srv->ev, srv_socket->fd);
-			}
-
-			close(srv_socket->fd);
-		}
-
-		buffer_free(srv_socket->srv_token);
-
-		free(srv_socket);
-	}
-
-	free(srv->srv_sockets.ptr);
-
-	return 0;
-}
-
-typedef enum {
-	NETWORK_BACKEND_UNSET,
-	NETWORK_BACKEND_WRITE,
-	NETWORK_BACKEND_WRITEV,
-	NETWORK_BACKEND_LINUX_SENDFILE,
-	NETWORK_BACKEND_FREEBSD_SENDFILE,
-	NETWORK_BACKEND_SOLARIS_SENDFILEV
-} network_backend_t;
-
-int network_init(server *srv) {
-	buffer *b;
-	size_t i;
-	network_backend_t backend;
-
-	struct nb_map {
-		network_backend_t nb;
-		const char *name;
-	} network_backends[] = {
-		/* lowest id wins */
-#if defined USE_LINUX_SENDFILE
-		{ NETWORK_BACKEND_LINUX_SENDFILE,       "linux-sendfile" },
-#endif
-#if defined USE_FREEBSD_SENDFILE
-		{ NETWORK_BACKEND_FREEBSD_SENDFILE,     "freebsd-sendfile" },
-#endif
-#if defined USE_SOLARIS_SENDFILEV
-		{ NETWORK_BACKEND_SOLARIS_SENDFILEV,	"solaris-sendfilev" },
-#endif
-#if defined USE_WRITEV
-		{ NETWORK_BACKEND_WRITEV,		"writev" },
-#endif
-		{ NETWORK_BACKEND_WRITE,		"write" },
-		{ NETWORK_BACKEND_UNSET,        	NULL }
-	};
-
-#ifdef USE_OPENSSL
-	/* load SSL certificates */
-	for (i = 0; i < srv->config_context->used; i++) {
-		specific_config *s = srv->config_storage[i];
-
-		if (buffer_is_empty(s->ssl_pemfile)) continue;
-
-#ifdef OPENSSL_NO_TLSEXT
-		{
-			data_config *dc = (data_config *)srv->config_context->data[i];
-			if (COMP_HTTP_HOST == dc->comp) {
-			    log_error_write(srv, __FILE__, __LINE__, "ss", "SSL:",
-					    "can't use ssl.pemfile with $HTTP[\"host\"], openssl version does not support TLS extensions");
-			    return -1;
-			}
-		}
-#endif
-
 		if (srv->ssl_is_init == 0) {
 			SSL_load_error_strings();
 			SSL_library_init();
@@ -522,7 +485,7 @@ int network_init(server *srv) {
 					ERR_error_string(ERR_get_error(), NULL));
 			return -1;
 		}
-
+		
 		if (!s->ssl_use_sslv2) {
 			/* disable SSLv2 */
 			if (SSL_OP_NO_SSLv2 != SSL_CTX_set_options(s->ssl_ctx, SSL_OP_NO_SSLv2)) {
@@ -531,14 +494,18 @@ int network_init(server *srv) {
 				return -1;
 			}
 		}
-
+		
 		if (!buffer_is_empty(s->ssl_cipher_list)) {
-			/* Disable support for low encryption ciphers */
 			if (SSL_CTX_set_cipher_list(s->ssl_ctx, s->ssl_cipher_list->ptr) != 1) {
 				log_error_write(srv, __FILE__, __LINE__, "ss", "SSL:",
 						ERR_error_string(ERR_get_error(), NULL));
 				return -1;
 			}
+		}
+		
+		if (buffer_is_empty(s->ssl_pemfile)) {
+			log_error_write(srv, __FILE__, __LINE__, "s", "ssl.pemfile has to be set");
+			return -1;
 		}
 
 		if (!buffer_is_empty(s->ssl_ca_file)) {
@@ -547,30 +514,6 @@ int network_init(server *srv) {
 						ERR_error_string(ERR_get_error(), NULL), s->ssl_ca_file);
 				return -1;
 			}
-			if (s->ssl_verifyclient) {
-				STACK_OF(X509_NAME) *certs = SSL_load_client_CA_file(s->ssl_ca_file->ptr);
-				if (!certs) {
-					log_error_write(srv, __FILE__, __LINE__, "ssb", "SSL:",
-							ERR_error_string(ERR_get_error(), NULL), s->ssl_ca_file);
-				}
-				if (SSL_CTX_set_session_id_context(s->ssl_ctx, (void*) &srv, sizeof(srv)) != 1) {
-					log_error_write(srv, __FILE__, __LINE__, "ss", "SSL:",
-						ERR_error_string(ERR_get_error(), NULL));
-					return -1;
-				}
-				SSL_CTX_set_client_CA_list(s->ssl_ctx, certs);
-				SSL_CTX_set_verify(
-					s->ssl_ctx,
-					SSL_VERIFY_PEER | (s->ssl_verifyclient_enforce ? SSL_VERIFY_FAIL_IF_NO_PEER_CERT : 0),
-					NULL
-				);
-				SSL_CTX_set_verify_depth(s->ssl_ctx, s->ssl_verifyclient_depth);
-			}
-		} else if (s->ssl_verifyclient) {
-			log_error_write(
-				srv, __FILE__, __LINE__, "s",
-				"SSL: You specified ssl.verifyclient.activate but no ca_file"
-			);
 		}
 
 		if (SSL_CTX_use_certificate_file(s->ssl_ctx, s->ssl_pemfile->ptr, SSL_FILETYPE_PEM) < 0) {
@@ -592,19 +535,90 @@ int network_init(server *srv) {
 					s->ssl_pemfile);
 			return -1;
 		}
-		SSL_CTX_set_default_read_ahead(s->ssl_ctx, 1);
-		SSL_CTX_set_mode(s->ssl_ctx, SSL_CTX_get_mode(s->ssl_ctx) | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+		srv_socket->ssl_ctx = s->ssl_ctx;
+#else
 
-# ifndef OPENSSL_NO_TLSEXT
-		if (!SSL_CTX_set_tlsext_servername_callback(s->ssl_ctx, network_ssl_servername_callback) ||
-		    !SSL_CTX_set_tlsext_servername_arg(s->ssl_ctx, srv)) {
-			log_error_write(srv, __FILE__, __LINE__, "ss", "SSL:",
-					"failed to initialize TLS servername callback, openssl library does not support TLS servername extension");
-			return -1;
-		}
-# endif
-	}
+		buffer_free(srv_socket->srv_token);
+		free(srv_socket);
+
+		buffer_free(b);
+
+		log_error_write(srv, __FILE__, __LINE__, "ss", "SSL:",
+				"ssl requested but openssl support is not compiled in");
+
+		return -1;
 #endif
+	} else {
+#ifdef SO_ACCEPTFILTER
+		/*
+		 * FreeBSD accf_http filter
+		 *
+		 */
+		memset(&afa, 0, sizeof(afa));
+		strcpy(afa.af_name, "httpready");
+		if (setsockopt(srv_socket->sock->fd, SOL_SOCKET, SO_ACCEPTFILTER, &afa, sizeof(afa)) < 0) {
+			if (errno != ENOENT) {
+				log_error_write(srv, __FILE__, __LINE__, "ss", "can't set accept-filter 'httpready': ", strerror(errno));
+			}
+		}
+#endif
+	}
+
+	srv_socket->is_ssl = s->is_ssl;
+
+	if (srv->srv_sockets.size == 0) {
+		srv->srv_sockets.size = 4;
+		srv->srv_sockets.used = 0;
+		srv->srv_sockets.ptr = malloc(srv->srv_sockets.size * sizeof(server_socket));
+	} else if (srv->srv_sockets.used == srv->srv_sockets.size) {
+		srv->srv_sockets.size += 4;
+		srv->srv_sockets.ptr = realloc(srv->srv_sockets.ptr, srv->srv_sockets.size * sizeof(server_socket));
+	}
+
+	srv->srv_sockets.ptr[srv->srv_sockets.used++] = srv_socket;
+	buffer_free(b);
+
+	return 0;
+}
+
+int network_close(server *srv) {
+	size_t i;
+	for (i = 0; i < srv->srv_sockets.used; i++) {
+		server_socket *srv_socket = srv->srv_sockets.ptr[i];
+
+		if (srv_socket->sock->fd != -1) {
+			/* check if server fd are already registered */
+			if (srv_socket->sock->fde_ndx != -1) {
+				fdevent_event_del(srv->ev, srv_socket->sock);
+				fdevent_unregister(srv->ev, srv_socket->sock);
+			}
+		}
+
+		if (srv_socket->is_ssl) {
+#ifdef USE_OPENSSL
+			SSL_CTX_free(srv_socket->ssl_ctx);
+#endif
+		}
+
+		iosocket_free(srv_socket->sock);
+
+		buffer_free(srv_socket->srv_token);
+
+		free(srv_socket);
+	}
+
+#ifdef USE_OPENSSL
+	ERR_free_strings();
+#endif
+	free(srv->srv_sockets.ptr);
+
+	return 0;
+}
+
+int network_init(server *srv) {
+	buffer *b;
+	size_t i;
+	const network_backend_info_t *backend;
 
 	b = buffer_init();
 
@@ -621,56 +635,15 @@ int network_init(server *srv) {
 	srv->network_ssl_backend_write = network_write_chunkqueue_openssl;
 #endif
 
-	/* get a usefull default */
-	backend = network_backends[0].nb;
+	backend = network_get_backend_info_by_type(srv->network_backend);
+	assert(backend && backend->read_handler);
+	srv->network_backend_read  = backend->read_handler;
+	srv->network_backend_write = backend->write_handler;
 
-	/* match name against known types */
-	if (!buffer_is_empty(srv->srvconf.network_backend)) {
-		for (i = 0; network_backends[i].name; i++) {
-			/**/
-			if (buffer_is_equal_string(srv->srvconf.network_backend, network_backends[i].name, strlen(network_backends[i].name))) {
-				backend = network_backends[i].nb;
-				break;
-			}
-		}
-		if (NULL == network_backends[i].name) {
-			/* we don't know it */
-
-			log_error_write(srv, __FILE__, __LINE__, "sb",
-					"server.network-backend has a unknown value:",
-					srv->srvconf.network_backend);
-
-			return -1;
-		}
-	}
-
-	switch(backend) {
-	case NETWORK_BACKEND_WRITE:
-		srv->network_backend_write = network_write_chunkqueue_write;
-		break;
-#ifdef USE_WRITEV
-	case NETWORK_BACKEND_WRITEV:
-		srv->network_backend_write = network_write_chunkqueue_writev;
-		break;
+#ifdef USE_OPENSSL
+	srv->network_ssl_backend_write = network_write_chunkqueue_openssl;
+	srv->network_ssl_backend_read  = network_read_chunkqueue_openssl;
 #endif
-#ifdef USE_LINUX_SENDFILE
-	case NETWORK_BACKEND_LINUX_SENDFILE:
-		srv->network_backend_write = network_write_chunkqueue_linuxsendfile;
-		break;
-#endif
-#ifdef USE_FREEBSD_SENDFILE
-	case NETWORK_BACKEND_FREEBSD_SENDFILE:
-		srv->network_backend_write = network_write_chunkqueue_freebsdsendfile;
-		break;
-#endif
-#ifdef USE_SOLARIS_SENDFILEV
-	case NETWORK_BACKEND_SOLARIS_SENDFILEV:
-		srv->network_backend_write = network_write_chunkqueue_solarissendfilev;
-		break;
-#endif
-	default:
-		return -1;
-	}
 
 	/* check for $SERVER["socket"] */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -681,7 +654,11 @@ int network_init(server *srv) {
 		/* not our stage */
 		if (COMP_SERVER_SOCKET != dc->comp) continue;
 
-		if (dc->cond != CONFIG_COND_EQ) continue;
+		if (dc->cond != CONFIG_COND_EQ) {
+			log_error_write(srv, __FILE__, __LINE__, "s", "only == is allowed for $SERVER[\"socket\"].");
+
+			return -1;
+		}
 
 		/* check if we already know this socket,
 		 * if yes, don't init it */
@@ -701,23 +678,40 @@ int network_init(server *srv) {
 
 int network_register_fdevents(server *srv) {
 	size_t i;
-
 	if (-1 == fdevent_reset(srv->ev)) {
 		return -1;
 	}
-
 	/* register fdevents after reset */
 	for (i = 0; i < srv->srv_sockets.used; i++) {
 		server_socket *srv_socket = srv->srv_sockets.ptr[i];
-
-		fdevent_register(srv->ev, srv_socket->fd, network_server_handle_fdevent, srv_socket);
-		fdevent_event_add(srv->ev, &(srv_socket->fde_ndx), srv_socket->fd, FDEVENT_IN);
+		fdevent_register(srv->ev, srv_socket->sock, network_server_handle_fdevent, srv_socket);
+		fdevent_event_add(srv->ev, srv_socket->sock, FDEVENT_IN);
 	}
 	return 0;
 }
 
-int network_write_chunkqueue(server *srv, connection *con, chunkqueue *cq) {
-	int ret = -1;
+network_status_t network_read(server *srv, connection *con, iosocket *sock, chunkqueue *cq) {
+	server_socket *srv_socket = con->srv_socket;
+	network_status_t ret = NETWORK_STATUS_UNSET;
+	off_t start_bytes_in = cq->bytes_in;
+
+   	if (srv_socket->is_ssl) {
+#ifdef USE_OPENSSL
+		ret = srv->network_ssl_backend_read(srv, con, sock, cq);
+#else
+		ret = NETWORK_STATUS_FATAL_ERROR;
+#endif
+	} else {
+		ret =  srv->network_backend_read(srv, con, sock, cq);
+	}
+
+	con->bytes_read += cq->bytes_in - start_bytes_in;
+
+	return ret;
+}
+
+network_status_t network_write_chunkqueue(server *srv, connection *con, chunkqueue *cq) {
+	network_status_t ret = NETWORK_STATUS_UNSET;
 	off_t written = 0;
 #ifdef TCP_CORK
 	int corked = 0;
@@ -731,7 +725,7 @@ int network_write_chunkqueue(server *srv, connection *con, chunkqueue *cq) {
 		con->traffic_limit_reached = 1;
 		joblist_append(srv, con);
 
-		return 1;
+		return NETWORK_STATUS_WAIT_FOR_AIO_EVENT;
 	}
 
 	written = cq->bytes_out;
@@ -742,27 +736,34 @@ int network_write_chunkqueue(server *srv, connection *con, chunkqueue *cq) {
 	 */
 	if (cq->first && cq->first->next) {
 		corked = 1;
-		setsockopt(con->fd, IPPROTO_TCP, TCP_CORK, &corked, sizeof(corked));
+		setsockopt(con->sock->fd, IPPROTO_TCP, TCP_CORK, &corked, sizeof(corked));
 	}
 #endif
 
 	if (srv_socket->is_ssl) {
 #ifdef USE_OPENSSL
-		ret = srv->network_ssl_backend_write(srv, con, con->ssl, cq);
+		ret = srv->network_ssl_backend_write(srv, con, con->sock, cq);
 #endif
 	} else {
-		ret = srv->network_backend_write(srv, con, con->fd, cq);
+		ret = srv->network_backend_write(srv, con, con->sock, cq);
 	}
 
-	if (ret >= 0) {
+	switch (ret) {
+	case NETWORK_STATUS_WAIT_FOR_FD:
+	case NETWORK_STATUS_WAIT_FOR_AIO_EVENT:
+	case NETWORK_STATUS_WAIT_FOR_EVENT:
+	case NETWORK_STATUS_SUCCESS:
 		chunkqueue_remove_finished_chunks(cq);
-		ret = chunkqueue_is_empty(cq) ? 0 : 1;
+
+		break;
+	default:
+		break;
 	}
 
 #ifdef TCP_CORK
 	if (corked) {
 		corked = 0;
-		setsockopt(con->fd, IPPROTO_TCP, TCP_CORK, &corked, sizeof(corked));
+		setsockopt(con->sock->fd, IPPROTO_TCP, TCP_CORK, &corked, sizeof(corked));
 	}
 #endif
 

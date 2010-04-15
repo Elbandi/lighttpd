@@ -1,15 +1,18 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
 #include "response.h"
-#include "http_chunk.h"
 #include "stat_cache.h"
 
 #include "plugin.h"
 
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 /* plugin config for all request/connections */
 
@@ -31,6 +34,8 @@ typedef struct {
 /* init the plugin data */
 INIT_FUNC(mod_flv_streaming_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -104,13 +109,11 @@ SETDEFAULTS_FUNC(mod_flv_streaming_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_flv_streaming_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(extensions);
+	PATCH_OPTION(extensions);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -125,14 +128,13 @@ static int mod_flv_streaming_patch_connection(server *srv, connection *con, plug
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("flv-streaming.extensions"))) {
-				PATCH(extensions);
+				PATCH_OPTION(extensions);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 static int split_get_params(array *get_params, buffer *qrystr) {
 	size_t is_key = 1;
@@ -182,6 +184,10 @@ static int split_get_params(array *get_params, buffer *qrystr) {
 	return 0;
 }
 
+/**
+ * 
+ * @param  
+ */
 URIHANDLER_FUNC(mod_flv_streaming_path_handler) {
 	plugin_data *p = p_d;
 	int s_len;
@@ -189,9 +195,11 @@ URIHANDLER_FUNC(mod_flv_streaming_path_handler) {
 
 	UNUSED(srv);
 
-	if (con->mode != DIRECT) return HANDLER_GO_ON;
-
 	if (buffer_is_empty(con->physical.path)) return HANDLER_GO_ON;
+
+	if (con->conf.log_request_handling) {
+		TRACE("-- handling %s in mod_flv_streaming", SAFE_BUF_STR(con->physical.path));
+	}
 
 	mod_flv_streaming_patch_connection(srv, con, p);
 
@@ -208,7 +216,7 @@ URIHANDLER_FUNC(mod_flv_streaming_path_handler) {
 			data_string *get_param;
 			stat_cache_entry *sce = NULL;
 			buffer *b;
-			int start;
+			long start;
 			char *err = NULL;
 			/* if there is a start=[0-9]+ in the header use it as start,
 			 * otherwise send the full file */
@@ -217,42 +225,79 @@ URIHANDLER_FUNC(mod_flv_streaming_path_handler) {
 			buffer_copy_string_buffer(p->query_str, con->uri.query);
 			split_get_params(p->get_params, p->query_str);
 
-			if (NULL == (get_param = (data_string *)array_get_element(p->get_params, "start"))) {
+			if (NULL == (get_param = (data_string *)array_get_element(p->get_params, CONST_STR_LEN("start")))) {
+				if (con->conf.log_request_handling) {
+					TRACE("start=... not found, skipping %s", SAFE_BUF_STR(con->physical.path));
+				}
+
 				return HANDLER_GO_ON;
 			}
 
 			/* too short */
-			if (get_param->value->used < 2) return HANDLER_GO_ON;
+			if (get_param->value->used < 2) {
+				if (con->conf.log_request_handling) {
+					TRACE("start=... found, but empty, skipping %s", SAFE_BUF_STR(con->physical.path));
+				}
+
+				return HANDLER_GO_ON;
+			}
 
 			/* check if it is a number */
 			start = strtol(get_param->value->ptr, &err, 10);
 			if (*err != '\0') {
+				if (con->conf.log_request_handling) {
+					TRACE("parsing start '%s' as number failed, skipping %s", 
+							SAFE_BUF_STR(get_param->value), SAFE_BUF_STR(con->physical.path));
+				}
+
 				return HANDLER_GO_ON;
 			}
 
-			if (start <= 0) return HANDLER_GO_ON;
+			if (start <= 0) {
+				if (con->conf.log_request_handling) {
+					TRACE("start is <= 0, skipping %s", SAFE_BUF_STR(con->physical.path));
+				}
+
+				return HANDLER_GO_ON;
+			}
 
 			/* check if start is > filesize */
 			if (HANDLER_GO_ON != stat_cache_get_entry(srv, con, con->physical.path, &sce)) {
+				if (con->conf.log_request_handling) {
+					TRACE("stat() for %s failed", SAFE_BUF_STR(con->physical.path));
+				}
+
 				return HANDLER_GO_ON;
 			}
 
 			if (start > sce->st.st_size) {
+				if (con->conf.log_request_handling) {
+					TRACE("start > file-size, skipping %s", SAFE_BUF_STR(con->physical.path));
+				}
+
 				return HANDLER_GO_ON;
 			}
 
 			/* we are safe now, let's build a flv header */
-			b = chunkqueue_get_append_buffer(con->write_queue);
+			b = chunkqueue_get_append_buffer(con->send);
 			buffer_copy_string_len(b, CONST_STR_LEN("FLV\x1\x1\0\0\0\x9\0\0\0\x9"));
 
-			http_chunk_append_file(srv, con, con->physical.path, start, sce->st.st_size - start);
+			chunkqueue_append_file(con->send, con->physical.path, start, sce->st.st_size - start);
 
 			response_header_overwrite(srv, con, CONST_STR_LEN("Content-Type"), CONST_STR_LEN("video/x-flv"));
 
-			con->file_finished = 1;
+			con->send->is_closed = 1;
+
+			if (con->conf.log_request_handling) {
+				TRACE("sending %s from position %ld", SAFE_BUF_STR(con->physical.path), start);
+			}
 
 			return HANDLER_FINISHED;
 		}
+	}
+
+	if (con->conf.log_request_handling) {
+		TRACE("none of the extensions matched %s, leaving", SAFE_BUF_STR(con->physical.path));
 	}
 
 	/* not found */
@@ -261,8 +306,8 @@ URIHANDLER_FUNC(mod_flv_streaming_path_handler) {
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_flv_streaming_plugin_init(plugin *p);
-int mod_flv_streaming_plugin_init(plugin *p) {
+LI_EXPORT int mod_flv_streaming_plugin_init(plugin *p);
+LI_EXPORT int mod_flv_streaming_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("flv_streaming");
 

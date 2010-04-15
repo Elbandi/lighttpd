@@ -4,7 +4,7 @@
 lighttpd \- a fast, secure and flexible web server
 .
 .SH SYNOPSIS
-\fBlighttpd\fP [\fB\-ptDvVh\fP] \fB\-f\fP \fIconfigfile\fP [\fB\-m\fP \fImoduledir\fP]
+\fBlighttpd\fP [\fB\-ptDIvVh\fP] \fB\-f\fP \fIconfigfile\fP [\fB\-m\fP \fImoduledir\fP]
 .
 .SH DESCRIPTION
 \fBlighttpd\fP (pronounced 'lighty') is an advanced HTTP daemon that aims
@@ -35,6 +35,10 @@ Test the configuration file for syntax errors and exit.
 .TP 8
 \fB\-D\fP
 Do not daemonize (go into background). The default is to daemonize.
+.TP 8
+\fB\-I\fP
+Go to background on SIGINT (useful with -D).
+Has no effect when using kqueue or /dev/poll.
 .TP 8
 \fB\-v\fP
 Show version and exit.

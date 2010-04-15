@@ -1,36 +1,132 @@
 #include "network_backends.h"
 
 #ifdef USE_OPENSSL
+#include <sys/types.h>
+#include "sys-socket.h"
+#include <sys/stat.h>
+#include <sys/time.h>
+#ifndef _WIN32
+#include <sys/resource.h>
+
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <unistd.h>
+#include <netdb.h>
+#else
+#include <sys/types.h>
+#endif
+
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
 
 #include "network.h"
 #include "fdevent.h"
 #include "log.h"
 #include "stat_cache.h"
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/resource.h>
-
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <netdb.h>
-#include <string.h>
-#include <stdlib.h>
-#include <assert.h>
-
 # include <openssl/ssl.h>
 # include <openssl/err.h>
 
-int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chunkqueue *cq) {
+NETWORK_BACKEND_READ(openssl) {
+	buffer *b;
+	off_t len;
+	int read_something = 0;
+	off_t max_read = 256 * 1024;
+	off_t start_bytes_in = cq->bytes_in;
+
+	UNUSED(srv);
+	UNUSED(con);
+
+	do {
+		int oerrno;
+		b = chunkqueue_get_append_buffer(cq);
+		buffer_prepare_copy(b, 8192 + 12); /* ssl-chunk-size is 8kb */
+		ERR_clear_error();
+		len = SSL_read(sock->ssl, b->ptr, b->size - 1);
+
+		/**
+		 * man SSL_read:
+		 *
+		 * >0   is success
+		 * 0    is connection close
+		 * <0   is error 
+		 */
+		if (len <= 0) {
+			int r, ssl_err;
+
+			oerrno = errno; /* store the errno for SSL_ERROR_SYSCALL */
+			chunkqueue_remove_empty_last_chunk(cq);
+
+			switch ((r = SSL_get_error(sock->ssl, len))) {
+			case SSL_ERROR_WANT_READ:
+				return read_something ? NETWORK_STATUS_SUCCESS : NETWORK_STATUS_WAIT_FOR_EVENT;
+			case SSL_ERROR_SYSCALL:
+				/**
+				 * man SSL_get_error()
+				 *
+				 * SSL_ERROR_SYSCALL
+				 *   Some I/O error occurred.  The OpenSSL error queue may contain more
+				 *   information on the error.  If the error queue is empty (i.e.
+				 *   ERR_get_error() returns 0), ret can be used to find out more about
+				 *   the error: If ret == 0, an EOF was observed that violates the
+				 *   protocol.  If ret == -1, the underlying BIO reported an I/O error
+				 *   (for socket I/O on Unix systems, consult errno for details).
+				 *
+				 */
+				while((ssl_err = ERR_get_error())) {
+					/* get all errors from the error-queue */
+					ERROR("ssl-errors: %s", ERR_error_string(ssl_err, NULL));
+				}
+
+				if (len == 0) {
+					return NETWORK_STATUS_CONNECTION_CLOSE;
+				} else {
+					switch(oerrno) {
+					case EPIPE:
+					case ECONNRESET:
+						return NETWORK_STATUS_CONNECTION_CLOSE;
+					default:
+						ERROR("last-errno: (%d) %s", oerrno, strerror(oerrno));
+						break;
+					}
+				}
+
+				return NETWORK_STATUS_FATAL_ERROR;
+			case SSL_ERROR_ZERO_RETURN:
+				if (len == 0) {
+					/* clean shutdown on the remote side */
+					return NETWORK_STATUS_CONNECTION_CLOSE;
+				}
+				/* fall through otherwise */
+			default:
+				while((ssl_err = ERR_get_error())) {
+					/* get all errors from the error-queue */
+					ERROR("ssl-errors: %s", ERR_error_string(ssl_err, NULL));
+				}
+
+				return NETWORK_STATUS_FATAL_ERROR;
+			}
+		} else {
+			b->used += len;
+			b->ptr[b->used++] = '\0';
+
+			read_something = 1;
+			cq->bytes_in += len;
+		}
+
+		if (cq->bytes_in - start_bytes_in > max_read) return NETWORK_STATUS_SUCCESS;
+	} while (1);
+
+	return NETWORK_STATUS_FATAL_ERROR;
+}
+
+
+NETWORK_BACKEND_WRITE(openssl) {
 	int ssl_r;
 	chunk *c;
-	size_t chunks_written = 0;
 
 	/* this is a 64k sendbuffer
 	 *
@@ -56,7 +152,7 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 	 * if keep-alive is disabled */
 
 	if (con->keep_alive == 0) {
-		SSL_set_shutdown(ssl, SSL_RECEIVED_SHUTDOWN);
+		SSL_set_shutdown(sock->ssl, SSL_RECEIVED_SHUTDOWN);
 	}
 
 	for(c = cq->first; c; c = c->next) {
@@ -66,9 +162,9 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 		case MEM_CHUNK: {
 			char * offset;
 			size_t toSend;
-			ssize_t r;
+			ssize_t r = 0;
 
-			if (c->mem->used == 0 || c->mem->used == 1) {
+			if (c->mem->used == 0) {
 				chunk_finished = 1;
 				break;
 			}
@@ -84,20 +180,22 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 			 *        SSL_ERROR_WANT_READ or SSL_ERROR_WANT_WRITE, it must be
 			 *        repeated with the same arguments.
 			 *
+			 * SSL_write(..., 0) return 0 which is handle as an error (Success)
+			 * checking toSend and not calling SSL_write() is simpler
 			 */
 
 			ERR_clear_error();
-			if ((r = SSL_write(ssl, offset, toSend)) <= 0) {
+			if (toSend != 0 && (r = SSL_write(sock->ssl, offset, toSend)) <= 0) {
 				unsigned long err;
 
-				switch ((ssl_r = SSL_get_error(ssl, r))) {
+				switch ((ssl_r = SSL_get_error(sock->ssl, r))) {
 				case SSL_ERROR_WANT_WRITE:
 					break;
 				case SSL_ERROR_SYSCALL:
 					/* perhaps we have error waiting in our error-queue */
 					if (0 != (err = ERR_get_error())) {
 						do {
-							log_error_write(srv, __FILE__, __LINE__, "sdds", "SSL:",
+							ERROR("SSL_write(): SSL_get_error() = %d,  SSL_write() = %zd, msg = %s",
 									ssl_r, r,
 									ERR_error_string(err, NULL));
 						} while((err = ERR_get_error()));
@@ -106,35 +204,35 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 						switch(errno) {
 						case EPIPE:
 						case ECONNRESET:
-							return -2;
+							return NETWORK_STATUS_CONNECTION_CLOSE;
 						default:
-							log_error_write(srv, __FILE__, __LINE__, "sddds", "SSL:",
-									ssl_r, r, errno,
-									strerror(errno));
+							ERROR("SSL_write(): SSL_get_error() = %d,  SSL_write() = %zd, errmsg = %s (%d)",
+									ssl_r, r,
+									strerror(errno), errno);
 							break;
 						}
 					} else {
 						/* neither error-queue nor errno ? */
-						log_error_write(srv, __FILE__, __LINE__, "sddds", "SSL (error):",
-								ssl_r, r, errno,
-								strerror(errno));
+						ERROR("SSL_write(): SSL_get_error() = %d,  SSL_write() = %zd, errmsg = %s (%d)",
+									ssl_r, r,
+									strerror(errno), errno);
 					}
 
-					return  -1;
+					return  NETWORK_STATUS_FATAL_ERROR;
 				case SSL_ERROR_ZERO_RETURN:
 					/* clean shutdown on the remote side */
 
-					if (r == 0) return -2;
+					if (r == 0) return NETWORK_STATUS_CONNECTION_CLOSE;
 
 					/* fall through */
 				default:
 					while((err = ERR_get_error())) {
-						log_error_write(srv, __FILE__, __LINE__, "sdds", "SSL:",
+						ERROR("SSL_write(): SSL_get_error() = %d,  SSL_write() = %zd, msg = %s",
 								ssl_r, r,
 								ERR_error_string(err, NULL));
 					}
 
-					return  -1;
+					return  NETWORK_STATUS_FATAL_ERROR;
 				}
 			} else {
 				c->offset += r;
@@ -155,9 +253,9 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 			int write_wait = 0;
 
 			if (HANDLER_ERROR == stat_cache_get_entry(srv, con, c->file.name, &sce)) {
-				log_error_write(srv, __FILE__, __LINE__, "sb",
-						strerror(errno), c->file.name);
-				return -1;
+				ERROR("stat_cache_get_entry(%s) failed: %s", SAFE_BUF_STR(c->file.name), strerror(errno));
+
+				return NETWORK_STATUS_FATAL_ERROR;
 			}
 
 			if (NULL == local_send_buffer) {
@@ -171,18 +269,20 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 
 				if (toSend > LOCAL_SEND_BUFSIZE) toSend = LOCAL_SEND_BUFSIZE;
 
-				if (-1 == (ifd = open(c->file.name->ptr, O_RDONLY))) {
-					log_error_write(srv, __FILE__, __LINE__, "ss", "open failed:", strerror(errno));
+				if (-1 == (ifd = open(BUF_STR(c->file.name), O_RDONLY))) {
+					ERROR("open(%s) failed: %s", SAFE_BUF_STR(c->file.name), strerror(errno));
 
-					return -1;
+					return NETWORK_STATUS_FATAL_ERROR;
 				}
 
 
 				lseek(ifd, offset, SEEK_SET);
 				if (-1 == (toSend = read(ifd, local_send_buffer, toSend))) {
 					close(ifd);
-					log_error_write(srv, __FILE__, __LINE__, "ss", "read failed:", strerror(errno));
-					return -1;
+					
+					ERROR("read(%s) failed: %s", SAFE_BUF_STR(c->file.name), strerror(errno));
+
+					return NETWORK_STATUS_FATAL_ERROR;
 				}
 
 				s = local_send_buffer;
@@ -190,10 +290,10 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 				close(ifd);
 
 				ERR_clear_error();
-				if ((r = SSL_write(ssl, s, toSend)) <= 0) {
+				if ((r = SSL_write(sock->ssl, s, toSend)) <= 0) {
 					unsigned long err;
 
-					switch ((ssl_r = SSL_get_error(ssl, r))) {
+					switch ((ssl_r = SSL_get_error(sock->ssl, r))) {
 					case SSL_ERROR_WANT_WRITE:
 						write_wait = 1;
 						break;
@@ -201,7 +301,7 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 						/* perhaps we have error waiting in our error-queue */
 						if (0 != (err = ERR_get_error())) {
 							do {
-								log_error_write(srv, __FILE__, __LINE__, "sdds", "SSL:",
+								ERROR("SSL_write(): ssl-error: %d (ret = %zd): %s",
 										ssl_r, r,
 										ERR_error_string(err, NULL));
 							} while((err = ERR_get_error()));
@@ -210,35 +310,34 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 							switch(errno) {
 							case EPIPE:
 							case ECONNRESET:
-								return -2;
+								return NETWORK_STATUS_CONNECTION_CLOSE;
 							default:
-								log_error_write(srv, __FILE__, __LINE__, "sddds", "SSL:",
+								ERROR("SSL_write(): ssl-error: %d (ret = %zd). errno=%d, %s",
 										ssl_r, r, errno,
 										strerror(errno));
 								break;
 							}
 						} else {
-							/* neither error-queue nor errno ? */
-							log_error_write(srv, __FILE__, __LINE__, "sddds", "SSL (error):",
-									ssl_r, r, errno,
-									strerror(errno));
+							ERROR("SSL_write(): ssl-error: %d (ret = %zd). errno=%d, %s",
+										ssl_r, r, errno,
+										strerror(errno));
 						}
 
-						return  -1;
+						return  NETWORK_STATUS_FATAL_ERROR;
 					case SSL_ERROR_ZERO_RETURN:
 						/* clean shutdown on the remote side */
 
-						if (r == 0)  return -2;
+						if (r == 0)  return NETWORK_STATUS_CONNECTION_CLOSE;
 
 						/* fall thourgh */
 					default:
 						while((err = ERR_get_error())) {
-							log_error_write(srv, __FILE__, __LINE__, "sdds", "SSL:",
+							ERROR("SSL_write(): ssl-error: %d (ret = %zd), %s",
 									ssl_r, r,
 									ERR_error_string(err, NULL));
 						}
 
-						return -1;
+						return NETWORK_STATUS_FATAL_ERROR;
 					}
 				} else {
 					c->offset += r;
@@ -253,21 +352,18 @@ int network_write_chunkqueue_openssl(server *srv, connection *con, SSL *ssl, chu
 			break;
 		}
 		default:
-			log_error_write(srv, __FILE__, __LINE__, "s", "type not known");
+			ERROR("type not known: %d", c->type);
 
-			return -1;
+			return NETWORK_STATUS_FATAL_ERROR;
 		}
 
 		if (!chunk_finished) {
 			/* not finished yet */
-
-			break;
+			return NETWORK_STATUS_WAIT_FOR_EVENT;
 		}
-
-		chunks_written++;
 	}
 
-	return chunks_written;
+	return NETWORK_STATUS_SUCCESS;
 }
 #endif
 

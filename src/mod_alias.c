@@ -1,13 +1,14 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
 
 #include "plugin.h"
-
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
+#include "sys-strings.h"
 
 /* plugin config for all request/connections */
 typedef struct {
@@ -25,6 +26,8 @@ typedef struct {
 /* init the plugin data */
 INIT_FUNC(mod_alias_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -45,7 +48,7 @@ FREE_FUNC(mod_alias_free) {
 		for (i = 0; i < srv->config_context->used; i++) {
 			plugin_config *s = p->config_storage[i];
 
-			if(!s) continue;
+			if (!s) continue;
 
 			array_free(s->alias);
 
@@ -103,8 +106,9 @@ SETDEFAULTS_FUNC(mod_alias_set_defaults) {
 					}
 					/* ok, they have same prefix. check position */
 					if (a->sorted[j] < a->sorted[k]) {
-						log_error_write(srv, __FILE__, __LINE__, "SBSBS",
-							"url.alias: `", key, "' will never match as `", prefix, "' matched first");
+						fprintf(stderr, "url.alias: `%s' will never match as `%s' matched first\n",
+								key->ptr,
+								prefix->ptr);
 						return HANDLER_ERROR;
 					}
 				}
@@ -115,13 +119,11 @@ SETDEFAULTS_FUNC(mod_alias_set_defaults) {
 	return HANDLER_GO_ON;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_alias_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(alias);
+	PATCH_OPTION(alias);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -136,14 +138,13 @@ static int mod_alias_patch_connection(server *srv, connection *con, plugin_data 
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("alias.url"))) {
-				PATCH(alias);
+				PATCH_OPTION(alias);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 PHYSICALPATH_FUNC(mod_alias_physical_handler) {
 	plugin_data *p = p_d;
@@ -187,8 +188,8 @@ PHYSICALPATH_FUNC(mod_alias_physical_handler) {
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_alias_plugin_init(plugin *p);
-int mod_alias_plugin_init(plugin *p) {
+LI_EXPORT int mod_alias_plugin_init(plugin *p);
+LI_EXPORT int mod_alias_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("alias");
 

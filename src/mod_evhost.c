@@ -1,11 +1,13 @@
+#include <string.h>
+#include <errno.h>
+#include <ctype.h>
+
 #include "plugin.h"
 #include "log.h"
 #include "response.h"
 #include "stat_cache.h"
 
-#include <string.h>
-#include <errno.h>
-#include <ctype.h>
+#include "sys-files.h"
 
 typedef struct {
 	/* unparsed pieces */
@@ -26,6 +28,8 @@ typedef struct {
 
 INIT_FUNC(mod_evhost_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -115,7 +119,6 @@ SETDEFAULTS_FUNC(mod_evhost_set_defaults) {
 	 * # %2 => domain name without tld
 	 * # %3 => subdomain 1 name
 	 * # %4 => subdomain 2 name
-	 * # %_ => fqdn (without port info)
 	 * #
 	 * evhost.path-pattern = "/home/ckruse/dev/www/%3/htdocs/"
 	 *
@@ -155,12 +158,11 @@ SETDEFAULTS_FUNC(mod_evhost_set_defaults) {
 }
 
 /**
- * assign the different parts of the domain to array-indezes (sub2.sub1.domain.tld)
- * - %0 - domain.tld
+ * assign the different parts of the domain to array-indezes
+ * - %0 - full hostname (authority w/o port)
  * - %1 - tld
- * - %2 - domain
- * - %3 - sub1
- * - ...
+ * - %2 - domain.tld
+ * - %3 -
  */
 
 static int mod_evhost_parse_host(connection *con,array *host) {
@@ -213,7 +215,7 @@ static int mod_evhost_parse_host(connection *con,array *host) {
 		if (colon != ptr) {
 			ds = data_string_init();
 			buffer_copy_string_len(ds->key,CONST_STR_LEN("%"));
-			buffer_append_long(ds->key, i /* ++ */);
+			buffer_append_long(ds->key, i++);
 			buffer_copy_string_len(ds->value,ptr,colon-ptr);
 
 			array_insert_unique(host,(data_unset *)ds);
@@ -223,14 +225,12 @@ static int mod_evhost_parse_host(connection *con,array *host) {
 	return 0;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_evhost_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(path_pieces);
-	PATCH(len);
+	PATCH_OPTION(path_pieces);
+	PATCH_OPTION(len);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -245,16 +245,14 @@ static int mod_evhost_patch_connection(server *srv, connection *con, plugin_data
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("evhost.path-pattern"))) {
-				PATCH(path_pieces);
-				PATCH(len);
+				PATCH_OPTION(path_pieces);
+				PATCH_OPTION(len);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
-
 
 static handler_t mod_evhost_uri_handler(server *srv, connection *con, void *p_d) {
 	plugin_data *p = p_d;
@@ -289,17 +287,7 @@ static handler_t mod_evhost_uri_handler(server *srv, connection *con, void *p_d)
 			if (*(ptr+1) == '%') {
 				/* %% */
 				buffer_append_string_len(p->tmp_buf,CONST_STR_LEN("%"));
-			} else if (*(ptr+1) == '_' ) {
-				/* %_ == full hostname */
-				char *colon = strchr(con->uri.authority->ptr, ':');
-
-				if(colon == NULL) {
-					buffer_append_string_buffer(p->tmp_buf, con->uri.authority); /* adds fqdn */
-				} else {
-					/* strip the port out of the authority-part of the URI scheme */
-					buffer_append_string_len(p->tmp_buf, con->uri.authority->ptr, colon - con->uri.authority->ptr); /* adds fqdn */
-				}
-			} else if (NULL != (ds = (data_string *)array_get_element(parsed_host,p->conf.path_pieces[i]->ptr))) {
+			} else if (NULL != (ds = (data_string *)array_get_element(parsed_host, CONST_BUF_LEN(p->conf.path_pieces[i])))) {
 				if (ds->value->used) {
 					buffer_append_string_buffer(p->tmp_buf,ds->value);
 				}
@@ -311,7 +299,7 @@ static handler_t mod_evhost_uri_handler(server *srv, connection *con, void *p_d)
 		}
 	}
 
-	BUFFER_APPEND_SLASH(p->tmp_buf);
+	PATHNAME_APPEND_SLASH(p->tmp_buf);
 
 	array_free(parsed_host);
 
@@ -330,8 +318,8 @@ static handler_t mod_evhost_uri_handler(server *srv, connection *con, void *p_d)
 	return HANDLER_GO_ON;
 }
 
-int mod_evhost_plugin_init(plugin *p);
-int mod_evhost_plugin_init(plugin *p) {
+LI_EXPORT int mod_evhost_plugin_init(plugin *p);
+LI_EXPORT int mod_evhost_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name                    = buffer_init_string("evhost");
 	p->init                    = mod_evhost_init;

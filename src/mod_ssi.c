@@ -1,3 +1,12 @@
+#include <sys/types.h>
+
+#include <ctype.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -13,38 +22,26 @@
 #include "inet_ntop_cache.h"
 
 #include "sys-socket.h"
-
-#include <sys/types.h>
-
-#include <ctype.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <errno.h>
-#include <time.h>
-#include <unistd.h>
+#include "sys-strings.h"
+#include "sys-files.h"
 
 #ifdef HAVE_PWD_H
-# include <pwd.h>
+#include <pwd.h>
 #endif
 
 #ifdef HAVE_FORK
-# include <sys/wait.h>
+#include <sys/wait.h>
 #endif
 
 #ifdef HAVE_SYS_FILIO_H
-# include <sys/filio.h>
+#include <sys/filio.h>
 #endif
-
-#include "etag.h"
-#include "version.h"
-
-/* The newest modified time of included files for include statement */
-static volatile time_t include_file_last_mtime = 0;
 
 /* init the plugin data */
 INIT_FUNC(mod_ssi_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -204,34 +201,6 @@ static int ssi_env_add_request_headers(server *srv, connection *con, plugin_data
 		}
 	}
 
-	for (i = 0; i < con->environment->used; i++) {
-		data_string *ds;
-
-		ds = (data_string *)con->environment->data[i];
-
-		if (ds->value->used && ds->key->used) {
-			size_t j;
-
-			buffer_reset(srv->tmp_buf);
-			buffer_prepare_append(srv->tmp_buf, ds->key->used + 2);
-
-			for (j = 0; j < ds->key->used - 1; j++) {
-				char c = '_';
-				if (light_isalpha(ds->key->ptr[j])) {
-					/* upper-case */
-					c = ds->key->ptr[j] & ~32;
-				} else if (light_isdigit(ds->key->ptr[j])) {
-					/* copy */
-					c = ds->key->ptr[j];
-				}
-				srv->tmp_buf->ptr[srv->tmp_buf->used++] = c;
-			}
-			srv->tmp_buf->ptr[srv->tmp_buf->used] = '\0';
-
-			ssi_env_add(p->ssi_cgi_env, srv->tmp_buf->ptr, ds->value->ptr);
-		}
-	}
-
 	return 0;
 }
 
@@ -249,7 +218,7 @@ static int build_ssi_cgi_vars(server *srv, connection *con, plugin_data *p) {
 
 	array_reset(p->ssi_cgi_env);
 
-	ssi_env_add(p->ssi_cgi_env, CONST_STRING("SERVER_SOFTWARE"), PACKAGE_DESC);
+	ssi_env_add(p->ssi_cgi_env, CONST_STRING("SERVER_SOFTWARE"), PACKAGE_NAME"/"PACKAGE_VERSION);
 	ssi_env_add(p->ssi_cgi_env, CONST_STRING("SERVER_NAME"),
 #ifdef HAVE_IPV6
 		     inet_ntop(srv_sock->addr.plain.sa_family,
@@ -362,8 +331,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 	switch(ssicmd) {
 	case SSI_ECHO: {
 		/* echo */
-		int var = 0;
-		/* int enc = 0; */
+		int var = 0, enc = 0;
 		const char *var_val = NULL;
 		stat_cache_entry *sce = NULL;
 
@@ -382,7 +350,6 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 			{ NULL, SSI_ECHO_UNSET }
 		};
 
-/*
 		struct {
 			const char *var;
 			enum { SSI_ENC_UNSET, SSI_ENC_URL, SSI_ENC_NONE, SSI_ENC_ENTITY } type;
@@ -393,7 +360,6 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 
 			{ NULL, SSI_ENC_UNSET }
 		};
-*/
 
 		for (i = 2; i < n; i += 2) {
 			if (0 == strcmp(l[i], "var")) {
@@ -408,7 +374,6 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 					}
 				}
 			} else if (0 == strcmp(l[i], "encoding")) {
-/*
 				int j;
 
 				for (j = 0; encvars[j].var; j++) {
@@ -417,7 +382,6 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 						break;
 					}
 				}
-*/
 			} else {
 				log_error_write(srv, __FILE__, __LINE__, "sss",
 						"ssi: unknow attribute for ",
@@ -440,7 +404,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 		case SSI_ECHO_USER_NAME: {
 			struct passwd *pw;
 
-			b = chunkqueue_get_append_buffer(con->write_queue);
+			b = chunkqueue_get_append_buffer(con->send);
 #ifdef HAVE_PWD_H
 			if (NULL == (pw = getpwuid(sce->st.st_uid))) {
 				buffer_copy_long(b, sce->st.st_uid);
@@ -455,7 +419,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 		case SSI_ECHO_LAST_MODIFIED:	{
 			time_t t = sce->st.st_mtime;
 
-			b = chunkqueue_get_append_buffer(con->write_queue);
+			b = chunkqueue_get_append_buffer(con->send);
 			if (0 == strftime(buf, sizeof(buf), p->timefmt->ptr, localtime(&t))) {
 				buffer_copy_string_len(b, CONST_STR_LEN("(none)"));
 			} else {
@@ -466,7 +430,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 		case SSI_ECHO_DATE_LOCAL: {
 			time_t t = time(NULL);
 
-			b = chunkqueue_get_append_buffer(con->write_queue);
+			b = chunkqueue_get_append_buffer(con->send);
 			if (0 == strftime(buf, sizeof(buf), p->timefmt->ptr, localtime(&t))) {
 				buffer_copy_string_len(b, CONST_STR_LEN("(none)"));
 			} else {
@@ -477,7 +441,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 		case SSI_ECHO_DATE_GMT: {
 			time_t t = time(NULL);
 
-			b = chunkqueue_get_append_buffer(con->write_queue);
+			b = chunkqueue_get_append_buffer(con->send);
 			if (0 == strftime(buf, sizeof(buf), p->timefmt->ptr, gmtime(&t))) {
 				buffer_copy_string_len(b, CONST_STR_LEN("(none)"));
 			} else {
@@ -488,7 +452,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 		case SSI_ECHO_DOCUMENT_NAME: {
 			char *sl;
 
-			b = chunkqueue_get_append_buffer(con->write_queue);
+			b = chunkqueue_get_append_buffer(con->send);
 			if (NULL == (sl = strrchr(con->physical.path->ptr, '/'))) {
 				buffer_copy_string_buffer(b, con->physical.path);
 			} else {
@@ -497,7 +461,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 			break;
 		}
 		case SSI_ECHO_DOCUMENT_URI: {
-			b = chunkqueue_get_append_buffer(con->write_queue);
+			b = chunkqueue_get_append_buffer(con->send);
 			buffer_copy_string_buffer(b, con->uri.path);
 			break;
 		}
@@ -505,9 +469,9 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 			data_string *ds;
 			/* check if it is a cgi-var */
 
-			b = chunkqueue_get_append_buffer(con->write_queue);
+			b = chunkqueue_get_append_buffer(con->send);
 
-			if (NULL != (ds = (data_string *)array_get_element(p->ssi_cgi_env, var_val))) {
+			if (NULL != (ds = (data_string *)array_get_element(p->ssi_cgi_env, var_val, strlen(var_val)))) {
 				buffer_copy_string_buffer(b, ds->value);
 			} else {
 				buffer_copy_string_len(b, CONST_STR_LEN("(none)"));
@@ -593,7 +557,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 
 			switch (ssicmd) {
 			case SSI_FSIZE:
-				b = chunkqueue_get_append_buffer(con->write_queue);
+				b = chunkqueue_get_append_buffer(con->send);
 				if (p->sizefmt) {
 					int j = 0;
 					const char *abr[] = { " B", " kB", " MB", " GB", " TB", NULL };
@@ -609,7 +573,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 				}
 				break;
 			case SSI_FLASTMOD:
-				b = chunkqueue_get_append_buffer(con->write_queue);
+				b = chunkqueue_get_append_buffer(con->send);
 				if (0 == strftime(buf, sizeof(buf), p->timefmt->ptr, localtime(&t))) {
 					buffer_copy_string_len(b, CONST_STR_LEN("(none)"));
 				} else {
@@ -617,12 +581,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 				}
 				break;
 			case SSI_INCLUDE:
-				chunkqueue_append_file(con->write_queue, p->stat_fn, 0, st.st_size);
-
-				/* Keep the newest mtime of included files */
-				if (st.st_mtime > include_file_last_mtime)
-				  include_file_last_mtime = st.st_mtime;
-
+				chunkqueue_append_file(con->send, p->stat_fn, 0, st.st_size);
 				break;
 			}
 		} else {
@@ -693,26 +652,23 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 	case SSI_PRINTENV:
 		if (p->if_is_false) break;
 
-		b = chunkqueue_get_append_buffer(con->write_queue);
+		b = chunkqueue_get_append_buffer(con->send);
+		buffer_copy_string_len(b, CONST_STR_LEN("<pre>"));
 		for (i = 0; i < p->ssi_vars->used; i++) {
 			data_string *ds = (data_string *)p->ssi_vars->data[p->ssi_vars->sorted[i]];
 
 			buffer_append_string_buffer(b, ds->key);
-			buffer_append_string_len(b, CONST_STR_LEN("="));
-			buffer_append_string_encoded(b, CONST_BUF_LEN(ds->value), ENCODING_MINIMAL_XML);
-			buffer_append_string_len(b, CONST_STR_LEN("\n"));
-		}
-		for (i = 0; i < p->ssi_cgi_env->used; i++) {
-			data_string *ds = (data_string *)p->ssi_cgi_env->data[p->ssi_cgi_env->sorted[i]];
+			buffer_append_string_len(b, CONST_STR_LEN(": "));
+			buffer_append_string_buffer(b, ds->value);
+			buffer_append_string_len(b, CONST_STR_LEN("<br />"));
 
-			buffer_append_string_buffer(b, ds->key);
-			buffer_append_string_len(b, CONST_STR_LEN("="));
-			buffer_append_string_encoded(b, CONST_BUF_LEN(ds->value), ENCODING_MINIMAL_XML);
-			buffer_append_string_len(b, CONST_STR_LEN("\n"));
 		}
+		buffer_append_string_len(b, CONST_STR_LEN("</pre>"));
 
 		break;
 	case SSI_EXEC: {
+#ifndef _WIN32
+
 		const char *cmd = NULL;
 		pid_t pid;
 		int from_exec_fds[2];
@@ -735,7 +691,7 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 		 */
 
 		if (!cmd) break;
-#ifdef HAVE_FORK
+
 		if (pipe(from_exec_fds)) {
 			log_error_write(srv, __FILE__, __LINE__, "ss",
 					"pipe failed: ", strerror(errno));
@@ -757,10 +713,8 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 
 			execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
 
-			log_error_write(srv, __FILE__, __LINE__, "sss", "spawing exec failed:", strerror(errno), cmd);
-
 			/* */
-			SEGFAULT();
+			SEGFAULT("spawing '%s' failed: %s", cmd, strerror(errno));
 			break;
 		}
 		case -1:
@@ -771,64 +725,48 @@ static int process_ssi_stmt(server *srv, connection *con, plugin_data *p,
 			/* father */
 			int status;
 			ssize_t r;
-			int was_interrupted = 0;
 
 			close(from_exec_fds[1]);
 
 			/* wait for the client to end */
+			if (-1 == waitpid(pid, &status, 0)) {
+				log_error_write(srv, __FILE__, __LINE__, "ss", "waitpid failed:", strerror(errno));
+			} else if (WIFEXITED(status)) {
+				int toread;
+				/* read everything from client and paste it into the output */
 
-			/*
-			 * OpenBSD and Solaris send a EINTR on SIGCHILD even if we ignore it
-			 */
-			do {
-				if (-1 == waitpid(pid, &status, 0)) {
-					if (errno == EINTR) {
-						was_interrupted++;
-					} else {
-						was_interrupted = 0;
-						log_error_write(srv, __FILE__, __LINE__, "ss", "waitpid failed:", strerror(errno));
+				while(1) {
+					if (ioctl(from_exec_fds[0], FIONREAD, &toread)) {
+						log_error_write(srv, __FILE__, __LINE__, "s",
+							"unexpected end-of-file (perhaps the ssi-exec process died)");
+						return -1;
 					}
-				} else if (WIFEXITED(status)) {
-					int toread;
-					/* read everything from client and paste it into the output */
-					was_interrupted = 0;
-	
-					while(1) {
-						if (ioctl(from_exec_fds[0], FIONREAD, &toread)) {
-							log_error_write(srv, __FILE__, __LINE__, "s",
-								"unexpected end-of-file (perhaps the ssi-exec process died)");
-							return -1;
-						}
-	
-						if (toread > 0) {
-							b = chunkqueue_get_append_buffer(con->write_queue);
-	
-							buffer_prepare_copy(b, toread + 1);
-	
-							if ((r = read(from_exec_fds[0], b->ptr, b->size - 1)) < 0) {
-								/* read failed */
-								break;
-							} else {
-								b->used = r;
-								b->ptr[b->used++] = '\0';
-							}
-						} else {
+
+					if (toread > 0) {
+						b = chunkqueue_get_append_buffer(con->send);
+
+						buffer_prepare_copy(b, toread + 1);
+
+						if ((r = read(from_exec_fds[0], b->ptr, b->size - 1)) < 0) {
+							/* read failed */
 							break;
+						} else {
+							b->used = r;
+							b->ptr[b->used++] = '\0';
 						}
+					} else {
+						break;
 					}
-				} else {
-					was_interrupted = 0;
-					log_error_write(srv, __FILE__, __LINE__, "s", "process exited abnormally");
 				}
-			} while (was_interrupted > 0 && was_interrupted < 4); /* if waitpid() gets interrupted, retry, but max 4 times */
-
+			} else {
+				log_error_write(srv, __FILE__, __LINE__, "s", "process exited abnormally");
+			}
 			close(from_exec_fds[0]);
 
 			break;
 		}
 		}
 #else
-
 		return -1;
 #endif
 
@@ -972,9 +910,6 @@ static int mod_ssi_handle_request(server *srv, connection *con, plugin_data *p) 
 	build_ssi_cgi_vars(srv, con, p);
 	p->if_is_false = 0;
 
-	/* Reset the modified time of included files */
-	include_file_last_mtime = 0;
-
 	if (-1 == stream_open(&s, con->physical.path)) {
 		log_error_write(srv, __FILE__, __LINE__, "sb",
 				"stream-open: ", con->physical.path);
@@ -1045,7 +980,7 @@ static int mod_ssi_handle_request(server *srv, connection *con, plugin_data *p) 
 		const char **l;
 		/* take everything from last offset to current match pos */
 
-		if (!p->if_is_false) chunkqueue_append_file(con->write_queue, con->physical.path, i, ovec[0] - i);
+		if (!p->if_is_false) chunkqueue_append_file(con->send, con->physical.path, i, ovec[0] - i);
 
 		pcre_get_substring_list(s.start, ovec, n, &l);
 		process_ssi_stmt(srv, con, p, l, n);
@@ -1055,7 +990,7 @@ static int mod_ssi_handle_request(server *srv, connection *con, plugin_data *p) 
 	switch(n) {
 	case PCRE_ERROR_NOMATCH:
 		/* copy everything/the rest */
-		chunkqueue_append_file(con->write_queue, con->physical.path, i, s.size - i);
+		chunkqueue_append_file(con->send, con->physical.path, i, s.size - i);
 
 		break;
 	default:
@@ -1069,8 +1004,7 @@ static int mod_ssi_handle_request(server *srv, connection *con, plugin_data *p) 
 	stream_close(&s);
 
 	con->file_started  = 1;
-	con->file_finished = 1;
-	con->mode = p->id;
+	con->send->is_closed = 1;
 
 	if (p->conf.content_type->used <= 1) {
 		response_header_overwrite(srv, con, CONST_STR_LEN("Content-Type"), CONST_STR_LEN("text/html"));
@@ -1078,44 +1012,18 @@ static int mod_ssi_handle_request(server *srv, connection *con, plugin_data *p) 
 		response_header_overwrite(srv, con, CONST_STR_LEN("Content-Type"), CONST_BUF_LEN(p->conf.content_type));
 	}
 
-	{
-  	/* Generate "ETag" & "Last-Modified" headers */
-
-		stat_cache_entry *sce = NULL;
-		time_t lm_time = 0;
-		buffer *mtime = NULL;
-
-		stat_cache_get_entry(srv, con, con->physical.path, &sce);
-
-		etag_mutate(con->physical.etag, sce->etag);
-		response_header_overwrite(srv, con, CONST_STR_LEN("ETag"), CONST_BUF_LEN(con->physical.etag));
-
-		if (sce->st.st_mtime > include_file_last_mtime)
-			lm_time = sce->st.st_mtime;
-		else
-			lm_time = include_file_last_mtime;
-
-		mtime = strftime_cache_get(srv, lm_time);
-		response_header_overwrite(srv, con, CONST_STR_LEN("Last-Modified"), CONST_BUF_LEN(mtime));
-	}
-
-	/* Reset the modified time of included files */
-	include_file_last_mtime = 0;
-
 	/* reset physical.path */
 	buffer_reset(con->physical.path);
 
 	return 0;
 }
 
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_ssi_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(ssi_extension);
-	PATCH(content_type);
+	PATCH_OPTION(ssi_extension);
+	PATCH_OPTION(content_type);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -1130,22 +1038,19 @@ static int mod_ssi_patch_connection(server *srv, connection *con, plugin_data *p
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("ssi.extension"))) {
-				PATCH(ssi_extension);
+				PATCH_OPTION(ssi_extension);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("ssi.content-type"))) {
-				PATCH(content_type);
+				PATCH_OPTION(content_type);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 URIHANDLER_FUNC(mod_ssi_physical_path) {
 	plugin_data *p = p_d;
 	size_t k;
-
-	if (con->mode != DIRECT) return HANDLER_GO_ON;
 
 	if (con->physical.path->used == 0) return HANDLER_GO_ON;
 
@@ -1162,7 +1067,6 @@ URIHANDLER_FUNC(mod_ssi_physical_path) {
 			if (mod_ssi_handle_request(srv, con, p)) {
 				/* on error */
 				con->http_status = 500;
-				con->mode = DIRECT;
 			}
 
 			return HANDLER_FINISHED;
@@ -1175,13 +1079,13 @@ URIHANDLER_FUNC(mod_ssi_physical_path) {
 
 /* this function is called at dlopen() time and inits the callbacks */
 
-int mod_ssi_plugin_init(plugin *p);
-int mod_ssi_plugin_init(plugin *p) {
+LI_EXPORT int mod_ssi_plugin_init(plugin *p);
+LI_EXPORT int mod_ssi_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("ssi");
 
 	p->init        = mod_ssi_init;
-	p->handle_subrequest_start = mod_ssi_physical_path;
+	p->handle_start_backend = mod_ssi_physical_path;
 	p->set_defaults  = mod_ssi_set_defaults;
 	p->cleanup     = mod_ssi_free;
 

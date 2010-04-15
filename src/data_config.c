@@ -1,8 +1,8 @@
-#include "array.h"
-
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#include "array.h"
 
 static data_unset *data_config_copy(const data_unset *s) {
 	data_config *src = (data_config *)s;
@@ -57,16 +57,13 @@ static void data_config_print(const data_unset *d, int depth) {
 	size_t i;
 	size_t maxlen;
 
-	if (0 == ds->context_ndx) {
-		fprintf(stdout, "config {\n");
-	}
-	else {
+	if (0 != ds->context_ndx) {
 		fprintf(stdout, "$%s %s \"%s\" {\n",
 				ds->comp_key->ptr, ds->op->ptr, ds->string->ptr);
 		array_print_indent(depth + 1);
 		fprintf(stdout, "# block %d\n", ds->context_ndx);
+		depth ++;
 	}
-	depth ++;
 
 	maxlen = array_get_max_key_length(a);
 	for (i = 0; i < a->used; i ++) {
@@ -99,10 +96,11 @@ static void data_config_print(const data_unset *d, int depth) {
 		}
 	}
 
-	depth --;
-	array_print_indent(depth);
-	fprintf(stdout, "}");
 	if (0 != ds->context_ndx) {
+		depth --;
+		array_print_indent(depth);
+		fprintf(stdout, "}");
+
 		fprintf(stdout, " # end of $%s %s \"%s\"",
 				ds->comp_key->ptr, ds->op->ptr, ds->string->ptr);
 	}

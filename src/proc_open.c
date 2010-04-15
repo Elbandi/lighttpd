@@ -1,26 +1,25 @@
-#include "proc_open.h"
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <errno.h>
+#include "proc_open.h"
 
-#ifdef WIN32
-# include <io.h>
-# include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
 #else
-# include <sys/wait.h>
-# include <unistd.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 
-#ifdef WIN32
+#ifdef _WIN32
 /* {{{ win32 stuff */
 # define SHELLENV "ComSpec"
 # define SECURITY_DC , SECURITY_ATTRIBUTES *security
 # define SECURITY_CC , security
 # define pipe(pair) (CreatePipe(&pair[0], &pair[1], security, 2048L) ? 0 : -1)
-static inline HANDLE dup_handle(HANDLE src, BOOL inherit, BOOL closeorig)
+static HANDLE dup_handle(HANDLE src, BOOL inherit, BOOL closeorig)
 {
 	HANDLE copy, self = GetCurrentProcess();
 
@@ -40,7 +39,7 @@ static void pipe_close_child(pipe_t *p) {
 			(p->fd == 0 ? O_RDONLY : O_WRONLY)|O_BINARY);
 }
 /* }}} */
-#else /* WIN32 */
+#else /* _WIN32 */
 /* {{{ unix way */
 # define SHELLENV "SHELL"
 # define SECURITY_DC
@@ -61,13 +60,13 @@ static void pipe_close_child(pipe_t *p) {
 	p->fd = p->parent;
 }
 /* }}} */
-#endif /* WIN32 */
+#endif /* _WIN32 */
 
 /* {{{ pipe_close */
 static void pipe_close(pipe_t *p) {
 	close_descriptor(p->parent);
 	close_descriptor(p->child);
-#ifdef WIN32
+#ifdef _WIN32
 	close(p->fd);
 #endif
 }
@@ -129,7 +128,7 @@ static void proc_close_childs(proc_handler_t *proc) {
 }
 /* }}} */
 
-#ifdef WIN32
+#ifdef _WIN32
 /* {{{ proc_close */
 int proc_close(proc_handler_t *proc) {
 	proc_pid_t child = proc->child;
@@ -207,7 +206,7 @@ int proc_open(proc_handler_t *proc, const char *command) {
 	return 0;
 }
 /* }}} */
-#else /* WIN32 */
+#else /* _WIN32 */
 /* {{{ proc_close */
 int proc_close(proc_handler_t *proc) {
 	pid_t child = proc->child;
@@ -271,11 +270,11 @@ int proc_open(proc_handler_t *proc, const char *command) {
 	}
 }
 /* }}} */
-#endif /* WIN32 */
+#endif /* _WIN32 */
 
 /* {{{ proc_read_fd_to_buffer */
 static void proc_read_fd_to_buffer(int fd, buffer *b) {
-	ssize_t s;
+	int s; /* win32 has not ssize_t */
 
 	for (;;) {
 		buffer_prepare_append(b, 512);
@@ -310,14 +309,6 @@ int proc_open_buffer(const char *command, buffer *in, buffer *out, buffer *err) 
 
 	if (err) {
 		proc_read_fd_to_buffer(proc.err.fd, err);
-	} else {
-		buffer *tmp = buffer_init();
-		proc_read_fd_to_buffer(proc.err.fd, tmp);
-		if (tmp->used > 0 &&  write(2, (void*)tmp->ptr, tmp->used) < 0) {
-			perror("error writing pipe");
-			return -1;
-		}
-		buffer_free(tmp);
 	}
 	pipe_close(&proc.err);
 
@@ -359,7 +350,7 @@ int main() {
 	return __LINE__ - 300; \
 } while (0)
 
-#ifdef WIN32
+#ifdef _WIN32
 #define CMD_CAT "pause"
 #else
 #define CMD_CAT "cat"

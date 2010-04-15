@@ -24,7 +24,7 @@ documentation and/or software.
  */
 
 #ifdef HAVE_CONFIG_H
-# include "config.h"
+#include "config.h"
 #endif
 
 #ifndef USE_OPENSSL
@@ -126,13 +126,12 @@ MD5_CTX *context;                                        /* context */
   operation, processing another message block, and updating the
   context.
  */
-void MD5_Update (context, _input, inputLen)
+void MD5_Update (context, input, inputLen)
 MD5_CTX *context;                                        /* context */
-const void *_input;                                /* input block */
+const unsigned char *input;                                /* input block */
 unsigned int inputLen;                     /* length of input block */
 {
   unsigned int i, ndx, partLen;
-  const unsigned char *input = (const unsigned char*) _input;
 
   /* Compute number of bytes mod 64 */
   ndx = (unsigned int)((context->count[0] >> 3) & 0x3F);

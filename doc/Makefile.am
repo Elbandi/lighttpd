@@ -5,13 +5,9 @@ authentication.txt \
 cgi.txt \
 compress.txt \
 configuration.txt \
-extforward.txt \
-fastcgi-state.txt \
-fastcgi.txt \
 features.txt \
 performance.txt \
 plugins.txt \
-proxy.txt \
 redirect.txt \
 rewrite.txt \
 secdownload.txt \
@@ -24,28 +20,21 @@ state.txt \
 rrdtool.txt \
 alias.txt \
 userdir.txt \
-mysqlvhost.txt \
 access.txt \
 traffic-shaping.txt \
 setenv.txt \
 status.txt \
-scgi.txt \
-cml.txt \
 trigger_b4_dl.txt \
 webdav.txt \
 expire.txt \
 dirlisting.txt \
-evhost.txt \
-magnet.txt
+evhost.txt
 
 HTMLDOCS=accesslog.html \
 	 authentication.html \
 	 cgi.html \
 	 compress.html \
 	 configuration.html \
-	 extforward.html \
-	 fastcgi-state.html \
-	 fastcgi.html \
 	 features.html \
 	 performance.html \
 	 plugins.html \
@@ -62,24 +51,20 @@ HTMLDOCS=accesslog.html \
 	 rrdtool.html \
 	 alias.html \
 	 userdir.html \
-	 mysqlvhost.html \
 	 access.html \
 	 traffic-shaping.html \
 	 setenv.html \
 	 status.html \
-	 scgi.html \
-	 cml.html \
 	 trigger_b4_dl.html \
 	 webdav.html \
 	 expire.html \
 	 dirlisting.html \
-	 evhost.html \
-	 magnet.html
+	 evhost.html
 
 EXTRA_DIST=lighttpd.conf lighttpd.user \
 	rc.lighttpd rc.lighttpd.redhat sysconfig.lighttpd \
 	rrdtool-graph.sh \
-	state.dot fastcgi-state.dot \
+	state.dot \
 	spawn-php.sh \
 	newstyle.css \
 	oldstyle.css \
@@ -89,15 +74,13 @@ EXTRA_DIST=lighttpd.conf lighttpd.user \
 	rst2html $^ > $@
 
 
-html-local: $(HTMLDOCS)
+html: $(HTMLDOCS)
 
 #%.ps.gz: %.ps
 #	gzip $^
-
+	
 #%.ps: %.dot
 #	dot -Tps -o $@ $^
 
 clean-local:
 	rm -f *.html
-
-

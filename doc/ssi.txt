@@ -7,16 +7,16 @@ Module: mod_ssi
 ---------------
 
 :Author: Jan Kneschke
-:Date: $Date: 2004/08/29 09:44:53 $
-:Revision: $Revision: 1.2 $
+:Date: $Date: 2005-03-28T08:30:05.699628Z $
+:Revision: $Revision: 227 $
 
 :abstract:
   The module for server-side includes provides a compatability
   layer for NSCA/Apache SSI.
-
+  
 .. meta::
   :keywords: lighttpd, ssi, Server-Side Includes
-
+  
 .. contents:: Table of Contents
 
 Description
@@ -73,4 +73,4 @@ which are not supported by this module for various reasons:
 - nested virtual
 - config.errmsg
 - echo.encoding
-
+	  

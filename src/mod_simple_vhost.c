@@ -1,3 +1,8 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -5,10 +10,11 @@
 
 #include "plugin.h"
 
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
+#include "sys-files.h"
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 typedef struct {
 	buffer *server_root;
@@ -33,6 +39,8 @@ typedef struct {
 
 INIT_FUNC(mod_simple_vhost_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -135,7 +143,7 @@ static int build_doc_root(server *srv, connection *con, plugin_data *p, buffer *
 			 */
 			char *dp;
 
-			BUFFER_APPEND_SLASH(out);
+			PATHNAME_APPEND_SLASH(out);
 
 			if (NULL == (dp = strchr(host->ptr, ':'))) {
 				buffer_append_string_buffer(out, host);
@@ -143,17 +151,17 @@ static int build_doc_root(server *srv, connection *con, plugin_data *p, buffer *
 				buffer_append_string_len(out, host->ptr, dp - host->ptr);
 			}
 		}
-		BUFFER_APPEND_SLASH(out);
+		PATHNAME_APPEND_SLASH(out);
 
 		if (p->conf.document_root->used > 2 && p->conf.document_root->ptr[0] == '/') {
 			buffer_append_string_len(out, p->conf.document_root->ptr + 1, p->conf.document_root->used - 2);
 		} else {
 			buffer_append_string_buffer(out, p->conf.document_root);
-			BUFFER_APPEND_SLASH(out);
+			PATHNAME_APPEND_SLASH(out);
 		}
 	} else {
 		buffer_copy_string_buffer(out, con->conf.document_root);
-		BUFFER_APPEND_SLASH(out);
+		PATHNAME_APPEND_SLASH(out);
 	}
 
 	if (HANDLER_ERROR == stat_cache_get_entry(srv, con, out, &sce)) {
@@ -169,22 +177,19 @@ static int build_doc_root(server *srv, connection *con, plugin_data *p, buffer *
 	return 0;
 }
 
-
-#define PATCH(x) \
-	p->conf.x = s->x;
 static int mod_simple_vhost_patch_connection(server *srv, connection *con, plugin_data *p) {
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	PATCH(server_root);
-	PATCH(default_host);
-	PATCH(document_root);
+	PATCH_OPTION(server_root);
+	PATCH_OPTION(default_host);
+	PATCH_OPTION(document_root);
 
-	PATCH(docroot_cache_key);
-	PATCH(docroot_cache_value);
-	PATCH(docroot_cache_servername);
+	PATCH_OPTION(docroot_cache_key);
+	PATCH_OPTION(docroot_cache_value);
+	PATCH_OPTION(docroot_cache_servername);
 
-	PATCH(debug);
+	PATCH_OPTION(debug);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -199,23 +204,22 @@ static int mod_simple_vhost_patch_connection(server *srv, connection *con, plugi
 			data_unset *du = dc->value->data[j];
 
 			if (buffer_is_equal_string(du->key, CONST_STR_LEN("simple-vhost.server-root"))) {
-				PATCH(server_root);
-				PATCH(docroot_cache_key);
-				PATCH(docroot_cache_value);
-				PATCH(docroot_cache_servername);
+				PATCH_OPTION(server_root);
+				PATCH_OPTION(docroot_cache_key);
+				PATCH_OPTION(docroot_cache_value);
+				PATCH_OPTION(docroot_cache_servername);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("simple-vhost.default-host"))) {
-				PATCH(default_host);
+				PATCH_OPTION(default_host);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("simple-vhost.document-root"))) {
-				PATCH(document_root);
+				PATCH_OPTION(document_root);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("simple-vhost.debug"))) {
-				PATCH(debug);
+				PATCH_OPTION(debug);
 			}
 		}
 	}
 
 	return 0;
 }
-#undef PATCH
 
 static handler_t mod_simple_vhost_docroot(server *srv, connection *con, void *p_data) {
 	plugin_data *p = p_data;
@@ -245,10 +249,6 @@ static handler_t mod_simple_vhost_docroot(server *srv, connection *con, void *p_
 				return HANDLER_GO_ON;
 			} else {
 				buffer_copy_string_buffer(con->server_name, p->conf.default_host);
-				buffer_copy_string_buffer(con->physical.doc_root, p->doc_root);
-
-				/* do not cache default host */
-				return HANDLER_GO_ON;
 			}
 		} else {
 			buffer_copy_string_buffer(con->server_name, con->uri.authority);
@@ -266,8 +266,8 @@ static handler_t mod_simple_vhost_docroot(server *srv, connection *con, void *p_
 }
 
 
-int mod_simple_vhost_plugin_init(plugin *p);
-int mod_simple_vhost_plugin_init(plugin *p) {
+LI_EXPORT int mod_simple_vhost_plugin_init(plugin *p);
+LI_EXPORT int mod_simple_vhost_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("simple_vhost");
 

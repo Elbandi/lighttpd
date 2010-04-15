@@ -1,3 +1,7 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -5,13 +9,15 @@
 #include "plugin.h"
 #include "response.h"
 
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 typedef struct {
 	pcre_keyvalue_buffer *redirect;
 	data_config *context; /* to which apply me */
+
+	unsigned short redirect_code;
 } plugin_config;
 
 typedef struct {
@@ -26,6 +32,8 @@ typedef struct {
 
 INIT_FUNC(mod_redirect_init) {
 	plugin_data *p;
+
+	UNUSED(srv);
 
 	p = calloc(1, sizeof(*p));
 
@@ -68,6 +76,7 @@ SETDEFAULTS_FUNC(mod_redirect_set_defaults) {
 
 	config_values_t cv[] = {
 		{ "url.redirect",               NULL, T_CONFIG_LOCAL, T_CONFIG_SCOPE_CONNECTION }, /* 0 */
+		{ "url.redirect-code",          NULL, T_CONFIG_SHORT, T_CONFIG_SCOPE_CONNECTION }, /* 1 */
 		{ NULL,                         NULL, T_CONFIG_UNSET, T_CONFIG_SCOPE_UNSET }
 	};
 
@@ -80,12 +89,13 @@ SETDEFAULTS_FUNC(mod_redirect_set_defaults) {
 		plugin_config *s;
 		size_t j;
 		array *ca;
-		data_array *da = (data_array *)du;
+		data_array *da = NULL;
 
 		s = calloc(1, sizeof(plugin_config));
 		s->redirect   = pcre_keyvalue_buffer_init();
 
 		cv[0].destination = s->redirect;
+		cv[1].destination = &(s->redirect_code);
 
 		p->config_storage[i] = s;
 		ca = ((data_config *)srv->config_context->data[i])->value;
@@ -94,7 +104,7 @@ SETDEFAULTS_FUNC(mod_redirect_set_defaults) {
 			return HANDLER_ERROR;
 		}
 
-		if (NULL == (du = array_get_element(ca, "url.redirect"))) {
+		if (NULL == (du = array_get_element(ca, CONST_STR_LEN("url.redirect")))) {
 			/* no url.redirect defined */
 			continue;
 		}
@@ -135,8 +145,8 @@ static int mod_redirect_patch_connection(server *srv, connection *con, plugin_da
 	size_t i, j;
 	plugin_config *s = p->config_storage[0];
 
-	p->conf.redirect = s->redirect;
-	p->conf.context = NULL;
+	PATCH_OPTION(redirect);
+	PATCH_OPTION(redirect_code);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -150,9 +160,11 @@ static int mod_redirect_patch_connection(server *srv, connection *con, plugin_da
 		for (j = 0; j < dc->value->used; j++) {
 			data_unset *du = dc->value->data[j];
 
-			if (0 == strcmp(du->key->ptr, "url.redirect")) {
-				p->conf.redirect = s->redirect;
+			if (buffer_is_equal_string(du->key, CONST_STR_LEN("url.redirect"))) {
+				PATCH_OPTION(redirect);
 				p->conf.context = dc;
+			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("url.redirect-code"))) {
+				PATCH_OPTION(redirect_code);
 			}
 		}
 	}
@@ -163,7 +175,7 @@ static int mod_redirect_patch_connection(server *srv, connection *con, plugin_da
 static handler_t mod_redirect_uri_handler(server *srv, connection *con, void *p_data) {
 #ifdef HAVE_PCRE_H
 	plugin_data *p = p_data;
-	size_t i;
+	int i;
 
 	/*
 	 * REWRITE URL
@@ -175,83 +187,19 @@ static handler_t mod_redirect_uri_handler(server *srv, connection *con, void *p_
 	mod_redirect_patch_connection(srv, con, p);
 
 	buffer_copy_string_buffer(p->match_buf, con->request.uri);
+	i = config_exec_pcre_keyvalue_buffer(con, p->conf.redirect, p->conf.context, p->match_buf, p->location);
 
-	for (i = 0; i < p->conf.redirect->used; i++) {
-		pcre *match;
-		pcre_extra *extra;
-		const char *pattern;
-		size_t pattern_len;
-		int n;
-		pcre_keyvalue *kv = p->conf.redirect->kv[i];
-# define N 10
-		int ovec[N * 3];
+	if (i >= 0) {
+		response_header_insert(srv, con, CONST_STR_LEN("Location"), CONST_BUF_LEN(p->location));
 
-		match       = kv->key;
-		extra       = kv->key_extra;
-		pattern     = kv->value->ptr;
-		pattern_len = kv->value->used - 1;
+		con->http_status = p->conf.redirect_code > 99 && p->conf.redirect_code < 1000 ? p->conf.redirect_code : 301;
+		con->send->is_closed = 1;
 
-		if ((n = pcre_exec(match, extra, p->match_buf->ptr, p->match_buf->used - 1, 0, 0, ovec, 3 * N)) < 0) {
-			if (n != PCRE_ERROR_NOMATCH) {
-				log_error_write(srv, __FILE__, __LINE__, "sd",
-						"execution error while matching: ", n);
-				return HANDLER_ERROR;
-			}
-		} else {
-			const char **list;
-			size_t start;
-			size_t k;
-
-			/* it matched */
-			pcre_get_substring_list(p->match_buf->ptr, ovec, n, &list);
-
-			/* search for $[0-9] */
-
-			buffer_reset(p->location);
-
-			start = 0;
-			for (k = 0; k + 1 < pattern_len; k++) {
-				if (pattern[k] == '$' || pattern[k] == '%') {
-					/* got one */
-
-					size_t num = pattern[k + 1] - '0';
-
-					buffer_append_string_len(p->location, pattern + start, k - start);
-
-					if (!isdigit((unsigned char)pattern[k + 1])) {
-						/* enable escape: "%%" => "%", "%a" => "%a", "$$" => "$" */
-						buffer_append_string_len(p->location, pattern+k, pattern[k] == pattern[k+1] ? 1 : 2);
-					} else if (pattern[k] == '$') {
-						/* n is always > 0 */
-						if (num < (size_t)n) {
-							buffer_append_string(p->location, list[num]);
-						}
-					} else if (p->conf.context == NULL) {
-						/* we have no context, we are global */
-						log_error_write(srv, __FILE__, __LINE__, "sb",
-								"used a rewrite containing a %[0-9]+ in the global scope, ignored:",
-								kv->value);
-					} else {
-						config_append_cond_match_buffer(con, p->conf.context, p->location, num);
-					}
-
-					k++;
-					start = k + 1;
-				}
-			}
-
-			buffer_append_string_len(p->location, pattern + start, pattern_len - start);
-
-			pcre_free(list);
-
-			response_header_insert(srv, con, CONST_STR_LEN("Location"), CONST_BUF_LEN(p->location));
-
-			con->http_status = 301;
-			con->mode = DIRECT;
-			con->file_finished = 1;
-
-			return HANDLER_FINISHED;
-		}
+		return HANDLER_FINISHED;
+	}
+	else if (i != PCRE_ERROR_NOMATCH) {
+		log_error_write(srv, __FILE__, __LINE__, "s",
+				"execution error while matching", i);
 	}
 #undef N
 
@@ -265,8 +213,8 @@ static handler_t mod_redirect_uri_handler(server *srv, connection *con, void *p_
 }
 
 
-int mod_redirect_plugin_init(plugin *p);
-int mod_redirect_plugin_init(plugin *p) {
+LI_EXPORT int mod_redirect_plugin_init(plugin *p);
+LI_EXPORT int mod_redirect_plugin_init(plugin *p) {
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("redirect");
 

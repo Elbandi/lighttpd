@@ -43,21 +43,21 @@ $t->{REQUEST}  = ( <<EOF
 GET / HTTP/.01
 EOF
  );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 400 } ];
+$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 505 } ];
 ok($tf->handle_http($t) == 0, 'missing major version');
 
 $t->{REQUEST}  = ( <<EOF
 GET / HTTP/01.
 EOF
  );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 400 } ];
+$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 505 } ];
 ok($tf->handle_http($t) == 0, 'missing minor version');
 
 $t->{REQUEST}  = ( <<EOF
 GET / HTTP/a.b
 EOF
  );
-$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 400 } ];
+$t->{RESPONSE} = [ { 'HTTP-Protocol' => 'HTTP/1.0', 'HTTP-Status' => 505 } ];
 ok($tf->handle_http($t) == 0, 'strings as version');
 
 $t->{REQUEST}  = ( <<EOF
@@ -122,7 +122,7 @@ ok($tf->handle_http($t) == 0, 'no whitespace');
 
 $t->{REQUEST}  = ( <<EOF
 GET / HTTP/1.0
-ABC:foo
+ABC:foo 
   bc
 EOF
  );

@@ -1,84 +1,85 @@
-AM_CFLAGS = $(FAM_CFLAGS)
+AM_CFLAGS = $(GTHREAD_CFLAGS)
 
-noinst_PROGRAMS=proc_open lemon # simple-fcgi #graphic evalo bench ajp ssl error_test adserver gen-license
-sbin_PROGRAMS=lighttpd lighttpd-angel
-LEMON=$(top_builddir)/src/lemon$(EXEEXT)
+noinst_PROGRAMS=proc_open lemon # simple-fcgi 
+if CHECK_WITH_FASTCGI
+sbin_PROGRAMS=lighttpd fcgi-stat-accel
+else
+sbin_PROGRAMS=lighttpd 
+endif
+LEMON=$(top_builddir)/src/lemon
 
 lemon_SOURCES=lemon.c
 
-lighttpd_angel_SOURCES=lighttpd-angel.c
-
-.PHONY: versionstamp parsers
-
-versionstamp:
-	@test -f versionstamp.h || touch versionstamp.h; \
-	REVISION=""; \
-	if test -d "$(top_srcdir)/.svn" -a -x "`which svnversion`"; then \
-		REVISION="$$(LANG= LC_ALL=C svnversion "$(top_srcdir)" 2>/dev/null || echo exported)"; \
-		if test "$$REVISION" = "exported"; then \
-			REVISION=""; \
-		fi; \
-	fi; \
-	if test -z "$$REVISION" -a -x "`which git`"; then \
-		REVISION="$$(cd "$(top_srcdir)"; LANG= LC_ALL=C git describe --always 2>/dev/null || echo)"; \
-	fi; \
-	if test -n "$$REVISION"; then \
-		echo "#define REPO_VERSION \"-devel-$$REVISION\"" > versionstamp.h.tmp; \
-	else \
-		echo "#define REPO_VERSION \"\"" > versionstamp.h.tmp; \
-	fi; \
-	if ! diff versionstamp.h.tmp versionstamp.h >/dev/null 2>/dev/null; then \
-		mv versionstamp.h.tmp versionstamp.h; \
-	else \
-		rm versionstamp.h.tmp; \
-	fi
+#simple_fcgi_SOURCES=simple-fcgi.c
+#simple_fcgi_LDADD=-lfcgi
 
 if CROSS_COMPILING
 configparser.c configparser.h:
 mod_ssi_exprparser.c mod_ssi_exprparser.h:
-
-parsers:
+http_req_parser.c http_req_parser.h:
+http_req_range_parser.c http_req_range_parser.h:
+mod_ssi_exprparser.c mod_ssi_exprparser.h:
 else
-configparser.h: configparser.c
-configparser.c: $(srcdir)/configparser.y $(srcdir)/lempar.c lemon$(EXEEXT)
+configparser.c configparser.h: $(srcdir)/configparser.y $(srcdir)/lempar.c |  $(LEMON)
 	rm -f configparser.h
 	$(LEMON) -q $(srcdir)/configparser.y $(srcdir)/lempar.c
 
-mod_ssi_exprparser.h: mod_ssi_exprparser.c
-mod_ssi_exprparser.c: $(srcdir)/mod_ssi_exprparser.y $(srcdir)/lempar.c lemon$(EXEEXT)
+http_resp_parser.c http_resp_parser.h: $(srcdir)/http_resp_parser.y $(srcdir)/lempar.c |  $(LEMON)
+	rm -f http_resp_parser.h
+	$(LEMON) -q $(srcdir)/http_resp_parser.y $(srcdir)/lempar.c
+
+http_req_parser.c http_req_parser.h: $(srcdir)/http_req_parser.y $(srcdir)/lempar.c |  $(LEMON)
+	rm -f http_req_parser.h
+	$(LEMON) -q $(srcdir)/http_req_parser.y $(srcdir)/lempar.c
+
+http_req_range_parser.c http_req_range_parser.h: $(srcdir)/http_req_range_parser.y $(srcdir)/lempar.c |  $(LEMON)
+	rm -f http_req_range_parser.h
+	$(LEMON) -q $(srcdir)/http_req_range_parser.y $(srcdir)/lempar.c
+
+mod_ssi_exprparser.c mod_ssi_exprparser.h: $(srcdir)/mod_ssi_exprparser.y $(srcdir)/lempar.c |  $(LEMON)
 	rm -f mod_ssi_exprparser.h
 	$(LEMON) -q $(srcdir)/mod_ssi_exprparser.y $(srcdir)/lempar.c
-
-parsers: configparser.c mod_ssi_exprparser.c
 endif
 
-BUILT_SOURCES = parsers versionstamp
-MAINTAINERCLEANFILES = configparser.c configparser.h mod_ssi_exprparser.c mod_ssi_exprparser.h
-CLEANFILES = versionstamp.h versionstamp.h.tmp
+BUILT_SOURCES = configparser.c configparser.h \
+      http_resp_parser.c http_resp_parser.h \
+      http_req_parser.c http_req_parser.h \
+      http_req_range_parser.c http_req_range_parser.h \
+      mod_ssi_exprparser.c mod_ssi_exprparser.h
 
 common_src=buffer.c log.c \
-      keyvalue.c chunk.c  \
-      http_chunk.c stream.c fdevent.c \
+      keyvalue.c chunk.c filter.c \
+      stream.c fdevent.c \
       stat_cache.c plugin.c joblist.c etag.c array.c \
       data_string.c data_count.c data_array.c \
-      data_integer.c md5.c data_fastcgi.c \
+      data_integer.c md5.c \
       fdevent_select.c fdevent_linux_rtsig.c \
       fdevent_poll.c fdevent_linux_sysepoll.c \
       fdevent_solaris_devpoll.c fdevent_freebsd_kqueue.c \
       data_config.c bitset.c \
       inet_ntop_cache.c crc32.c \
-      connections-glue.c \
-      configfile-glue.c \
+      connections-glue.c iosocket.c \
+      configfile-glue.c status_counter.c \
       http-header-glue.c \
       network_write.c network_linux_sendfile.c \
       network_freebsd_sendfile.c network_writev.c \
       network_solaris_sendfilev.c network_openssl.c \
-      splaytree.c status_counter.c
-
+      network_linux_aio.c \
+      network_posix_aio.c \
+      network_gthread_aio.c network_gthread_sendfile.c \
+      http_resp.c http_resp_parser.c \
+      http_req.c http_req_parser.c \
+      http_req_range.c http_req_range_parser.c timing.c
+      
 src = server.c response.c connections.c network.c \
       configfile.c configparser.c request.c proc_open.c
 
-lib_LTLIBRARIES =
+if CHECK_WITH_FASTCGI
+fcgi_stat_accel_SOURCES=fcgi-stat-accel.c
+fcgi_stat_accel_LDADD = -lfcgi
+endif
+
+lib_LTLIBRARIES = 
 
 if NO_RDYNAMIC
 # if the linker doesn't allow referencing symbols of the binary
@@ -88,17 +89,22 @@ lib_LTLIBRARIES += liblightcomp.la
 liblightcomp_la_SOURCES=$(common_src)
 liblightcomp_la_CFLAGS=$(AM_CFLAGS)
 liblightcomp_la_LDFLAGS = -avoid-version -no-undefined
-liblightcomp_la_LIBADD = $(PCRE_LIB) $(SSL_LIB) $(FAM_LIBS)
+liblightcomp_la_LIBADD = $(PCRE_LIB) $(SSL_LIB) $(GTHREAD_LIBS)
 common_libadd = liblightcomp.la
 else
 src += $(common_src)
-common_libadd =
+common_libadd = 
 endif
 
 lib_LTLIBRARIES += mod_flv_streaming.la
-mod_flv_streaming_la_SOURCES = mod_flv_streaming.c
+mod_flv_streaming_la_SOURCES = mod_flv_streaming.c 
 mod_flv_streaming_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_flv_streaming_la_LIBADD = $(common_libadd)
+
+lib_LTLIBRARIES += mod_uploadprogress.la
+mod_uploadprogress_la_SOURCES = mod_uploadprogress.c 
+mod_uploadprogress_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_uploadprogress_la_LIBADD = $(common_libadd)
 
 lib_LTLIBRARIES += mod_evasive.la
 mod_evasive_la_SOURCES = mod_evasive.c
@@ -109,19 +115,13 @@ lib_LTLIBRARIES += mod_webdav.la
 mod_webdav_la_SOURCES = mod_webdav.c
 mod_webdav_la_CFLAGS = $(AM_CFLAGS) $(XML_CFLAGS) $(SQLITE_CFLAGS) 
 mod_webdav_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_webdav_la_LIBADD = $(common_libadd) $(XML_LIBS) $(SQLITE_LIBS) $(UUID_LIBS)
+mod_webdav_la_LIBADD = $(common_libadd) $(XML_LIBS) $(SQLITE_LIBS) $(UUID_LIB)
 
 lib_LTLIBRARIES += mod_magnet.la
 mod_magnet_la_SOURCES = mod_magnet.c mod_magnet_cache.c
 mod_magnet_la_CFLAGS = $(AM_CFLAGS) $(LUA_CFLAGS)
 mod_magnet_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_magnet_la_LIBADD = $(common_libadd) $(LUA_LIBS) -lm
-
-lib_LTLIBRARIES += mod_cml.la
-mod_cml_la_SOURCES = mod_cml.c mod_cml_lua.c mod_cml_funcs.c
-mod_cml_la_CFLAGS = $(AM_CFLAGS) $(LUA_CFLAGS)
-mod_cml_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_cml_la_LIBADD = $(MEMCACHE_LIB) $(common_libadd) $(LUA_LIBS) -lm
+mod_magnet_la_LIBADD = $(MEMCACHE_LIB) $(common_libadd) $(LUA_LIBS) -lm
 
 lib_LTLIBRARIES += mod_trigger_b4_dl.la
 mod_trigger_b4_dl_la_SOURCES = mod_trigger_b4_dl.c
@@ -134,43 +134,60 @@ mod_mysql_vhost_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefine
 mod_mysql_vhost_la_LIBADD = $(MYSQL_LIBS) $(common_libadd)
 mod_mysql_vhost_la_CPPFLAGS = $(MYSQL_INCLUDE)
 
+lib_LTLIBRARIES += mod_postgresql_vhost.la
+mod_postgresql_vhost_la_SOURCES = mod_postgresql_vhost.c
+mod_postgresql_vhost_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_postgresql_vhost_la_LIBADD = $(POSTGRESQL_LIBS) $(common_libadd)
+mod_postgresql_vhost_la_CPPFLAGS = $(POSTGRESQL_INCLUDE)
+
+
+lib_LTLIBRARIES += mod_sql_vhost_core.la
+mod_sql_vhost_core_la_SOURCES = mod_sql_vhost_core.c
+mod_sql_vhost_core_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_sql_vhost_core_la_LIBADD = $(common_libadd)
+
 lib_LTLIBRARIES += mod_cgi.la
 mod_cgi_la_SOURCES = mod_cgi.c
 mod_cgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_cgi_la_LIBADD = $(common_libadd)
 
-lib_LTLIBRARIES += mod_scgi.la
-mod_scgi_la_SOURCES = mod_scgi.c
-mod_scgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_scgi_la_LIBADD = $(common_libadd)
-
 lib_LTLIBRARIES += mod_staticfile.la
-mod_staticfile_la_SOURCES = mod_staticfile.c
+mod_staticfile_la_SOURCES = mod_staticfile.c 
 mod_staticfile_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_staticfile_la_LIBADD = $(common_libadd)
 
+lib_LTLIBRARIES += mod_deflate.la
+mod_deflate_la_SOURCES = mod_deflate.c 
+mod_deflate_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_deflate_la_LIBADD = $(Z_LIB) $(BZ_LIB) $(common_libadd)
+
+lib_LTLIBRARIES += mod_chunked.la
+mod_chunked_la_SOURCES = mod_chunked.c 
+mod_chunked_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_chunked_la_LIBADD = $(common_libadd)
+
 lib_LTLIBRARIES += mod_dirlisting.la
-mod_dirlisting_la_SOURCES = mod_dirlisting.c
+mod_dirlisting_la_SOURCES = mod_dirlisting.c 
 mod_dirlisting_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_dirlisting_la_LIBADD = $(common_libadd) $(PCRE_LIB)
 
 lib_LTLIBRARIES += mod_indexfile.la
-mod_indexfile_la_SOURCES = mod_indexfile.c
+mod_indexfile_la_SOURCES = mod_indexfile.c 
 mod_indexfile_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_indexfile_la_LIBADD = $(common_libadd)
 
 lib_LTLIBRARIES += mod_setenv.la
-mod_setenv_la_SOURCES = mod_setenv.c
+mod_setenv_la_SOURCES = mod_setenv.c 
 mod_setenv_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_setenv_la_LIBADD = $(common_libadd)
 
 lib_LTLIBRARIES += mod_alias.la
-mod_alias_la_SOURCES = mod_alias.c
+mod_alias_la_SOURCES = mod_alias.c 
 mod_alias_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_alias_la_LIBADD = $(common_libadd)
 
 lib_LTLIBRARIES += mod_userdir.la
-mod_userdir_la_SOURCES = mod_userdir.c
+mod_userdir_la_SOURCES = mod_userdir.c 
 mod_userdir_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_userdir_la_LIBADD = $(common_libadd)
 
@@ -184,13 +201,37 @@ mod_usertrack_la_SOURCES = mod_usertrack.c
 mod_usertrack_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_usertrack_la_LIBADD = $(common_libadd)
 
-lib_LTLIBRARIES += mod_proxy.la
-mod_proxy_la_SOURCES = mod_proxy.c
-mod_proxy_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_proxy_la_LIBADD = $(common_libadd)
+lib_LTLIBRARIES += mod_proxy_core.la
+mod_proxy_core_la_SOURCES = mod_proxy_core.c mod_proxy_core_pool.c \
+			    mod_proxy_core_backend.c mod_proxy_core_address.c \
+			    mod_proxy_core_backlog.c mod_proxy_core_rewrites.c \
+			    mod_proxy_core_protocol.c
+mod_proxy_core_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_proxy_core_la_LIBADD = $(common_libadd) $(PCRE_LIB)
+
+lib_LTLIBRARIES += mod_proxy_backend_http.la
+mod_proxy_backend_http_la_SOURCES = mod_proxy_backend_http.c
+mod_proxy_backend_http_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_proxy_backend_http_la_LIBADD = $(common_libadd) $(PCRE_LIB)
+
+lib_LTLIBRARIES += mod_proxy_backend_fastcgi.la
+mod_proxy_backend_fastcgi_la_SOURCES = mod_proxy_backend_fastcgi.c
+mod_proxy_backend_fastcgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_proxy_backend_fastcgi_la_LIBADD = $(common_libadd) $(PCRE_LIB)
+
+lib_LTLIBRARIES += mod_proxy_backend_scgi.la
+mod_proxy_backend_scgi_la_SOURCES = mod_proxy_backend_scgi.c
+mod_proxy_backend_scgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_proxy_backend_scgi_la_LIBADD = $(common_libadd) $(PCRE_LIB)
+
+lib_LTLIBRARIES += mod_proxy_backend_ajp13.la
+mod_proxy_backend_ajp13_la_SOURCES = mod_proxy_backend_ajp13.c
+mod_proxy_backend_ajp13_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_proxy_backend_ajp13_la_LIBADD = $(common_libadd) $(PCRE_LIB)
+
 
 lib_LTLIBRARIES += mod_ssi.la
-mod_ssi_la_SOURCES = mod_ssi_exprparser.c mod_ssi_expr.c mod_ssi.c
+mod_ssi_la_SOURCES = mod_ssi_exprparser.c mod_ssi_expr.c mod_ssi.c 
 mod_ssi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_ssi_la_LIBADD = $(common_libadd) $(PCRE_LIB)
 
@@ -218,24 +259,14 @@ lib_LTLIBRARIES += mod_simple_vhost.la
 mod_simple_vhost_la_SOURCES = mod_simple_vhost.c
 mod_simple_vhost_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_simple_vhost_la_LIBADD = $(common_libadd)
-
-lib_LTLIBRARIES += mod_fastcgi.la
-mod_fastcgi_la_SOURCES = mod_fastcgi.c
-mod_fastcgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_fastcgi_la_LIBADD = $(common_libadd)
-
-lib_LTLIBRARIES += mod_extforward.la
-mod_extforward_la_SOURCES = mod_extforward.c
-mod_extforward_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_extforward_la_LIBADD = $(common_libadd)
-
+		
 lib_LTLIBRARIES += mod_access.la
 mod_access_la_SOURCES = mod_access.c
 mod_access_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_access_la_LIBADD = $(common_libadd)
 
 lib_LTLIBRARIES += mod_compress.la
-mod_compress_la_SOURCES = mod_compress.c
+mod_compress_la_SOURCES = mod_compress.c 
 mod_compress_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_compress_la_LIBADD = $(Z_LIB) $(BZ_LIB) $(common_libadd)
 
@@ -266,8 +297,8 @@ mod_accesslog_la_LIBADD = $(common_libadd)
 
 
 hdr = server.h buffer.h network.h log.h keyvalue.h \
-      response.h request.h fastcgi.h chunk.h \
-      settings.h http_chunk.h http_auth_digest.h \
+      response.h request.h fastcgi.h chunk.h filter.h \
+      settings.h http_auth_digest.h \
       md5.h http_auth.h stream.h \
       fdevent.h connections.h base.h stat_cache.h \
       plugin.h mod_auth.h \
@@ -275,17 +306,34 @@ hdr = server.h buffer.h network.h log.h keyvalue.h \
       network_backends.h configfile.h bitset.h \
       mod_ssi.h mod_ssi_expr.h inet_ntop_cache.h \
       configparser.h mod_ssi_exprparser.h \
-      sys-mmap.h sys-socket.h mod_cml.h mod_cml_funcs.h \
-      splaytree.h proc_open.h status_counter.h \
+      sys-mmap.h sys-socket.h \
+      proc_open.h mod_sql_vhost_core.h \
+      sys-files.h sys-process.h sys-strings.h  \
+      iosocket.h array-static.h \
+      mod_proxy_core_address.h \
+      mod_proxy_core_backend.h \
+      mod_proxy_core_backlog.h \
+      mod_proxy_core.h  \
+      mod_proxy_core_pool.h \
+      mod_proxy_core_rewrites.h \
+      status_counter.h \
+      http_req.h \
+      http_req_parser.h \
+      http_req_range.h \
+      http_req_range_parser.h \
+      http_resp.h \
+      http_resp_parser.h \
+      http_parser.h \
+      ajp13.h \
+      mod_proxy_core_protocol.h \
       mod_magnet_cache.h \
-      version.h
+      timing.h 
 
-DEFS= @DEFS@ -DHAVE_VERSION_H -DLIBRARY_DIR="\"$(libdir)\"" -DSBIN_DIR="\"$(sbindir)\""
+DEFS= @DEFS@ -DLIBRARY_DIR="\"$(libdir)\""
 
 lighttpd_SOURCES = $(src)
-lighttpd_LDADD = $(PCRE_LIB) $(DL_LIB) $(SENDFILE_LIB) $(ATTR_LIB) $(common_libadd) $(SSL_LIB) $(FAM_LIBS)
+lighttpd_LDADD = $(PCRE_LIB) $(DL_LIB) $(SENDFILE_LIB) $(ATTR_LIB) $(common_libadd) $(SSL_LIB) $(AIO_LIB) $(POSIX_AIO_LIB) $(GTHREAD_LIBS)
 lighttpd_LDFLAGS = -export-dynamic
-lighttpd_CCPFLAGS = $(FAM_CFLAGS)
 
 proc_open_SOURCES = proc_open.c buffer.c
 proc_open_CPPFLAGS= -DDEBUG_PROC_OPEN
@@ -305,5 +353,12 @@ proc_open_CPPFLAGS= -DDEBUG_PROC_OPEN
 #ajp_SOURCES = ajp.c
 
 noinst_HEADERS   = $(hdr)
-EXTRA_DIST = mod_skeleton.c configparser.y mod_ssi_exprparser.y lempar.c SConscript
+EXTRA_DIST = mod_skeleton.c \
+	     configparser.y \
+	     mod_ssi_exprparser.y \
+	     lempar.c  \
+	     http_resp_parser.y \
+	     http_req_parser.y \
+	     http_req_range_parser.y 
 
+SUBDIRS=valgrind

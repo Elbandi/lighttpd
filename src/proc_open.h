@@ -1,7 +1,7 @@
 
 #include "buffer.h"
 
-#ifdef WIN32
+#ifdef _WIN32
 #include <windows.h>
 typedef HANDLE descriptor_t;
 typedef HANDLE proc_pid_t;
@@ -20,6 +20,6 @@ typedef struct {
 	proc_pid_t child;
 } proc_handler_t;
 
-int proc_close(proc_handler_t *ht);
-int proc_open(proc_handler_t *ht, const char *command);
-int proc_open_buffer(const char *command, buffer *in, buffer *out, buffer *err);
+LI_EXPORT int proc_close(proc_handler_t *ht);
+LI_EXPORT int proc_open(proc_handler_t *ht, const char *command);
+LI_EXPORT  int proc_open_buffer(const char *command, buffer *in, buffer *out, buffer *err);
