@@ -40,6 +40,7 @@
 #define CONFIG_PROXY_CORE_MAX_POOL_SIZE    PROXY_CORE ".max-pool-size"
 #define CONFIG_PROXY_CORE_CHECK_LOCAL      PROXY_CORE ".check-local"
 #define CONFIG_PROXY_CORE_SPLIT_HOSTNAMES  PROXY_CORE ".split-hostnames"
+#define CONFIG_PROXY_CORE_WORKED_WITH_MODCACHE PROXY_CORE ".worked-with-modcache"
 
 static int mod_proxy_wakeup_connections(server *srv, plugin_data *p, plugin_config *p_conf);
 
@@ -269,6 +270,7 @@ SETDEFAULTS_FUNC(mod_proxy_core_set_defaults) {
 			T_CONFIG_DEPRECATED, T_CONFIG_SCOPE_CONNECTION },        /* 9 */
 		{ CONFIG_PROXY_CORE_MAX_KEEP_ALIVE, NULL, T_CONFIG_SHORT, T_CONFIG_SCOPE_CONNECTION },       /* 10 */
 		{ CONFIG_PROXY_CORE_SPLIT_HOSTNAMES, NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION },    /* 11 */
+		{ CONFIG_PROXY_CORE_WORKED_WITH_MODCACHE, NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION },    /* 12 */ 
 		{ NULL,                        NULL, T_CONFIG_UNSET, T_CONFIG_SCOPE_UNSET }
 	};
 
@@ -296,6 +298,7 @@ SETDEFAULTS_FUNC(mod_proxy_core_set_defaults) {
 		s->check_local = 0;
 		s->split_hostnames = 1;
 		s->max_keep_alive_requests = 0;
+		s->work_with_modcache = 1;
 
 		cv[0].destination = p->backends_arr;
 		cv[1].destination = &(s->debug);
@@ -306,6 +309,7 @@ SETDEFAULTS_FUNC(mod_proxy_core_set_defaults) {
 		cv[8].destination = &(s->max_pool_size);
 		cv[10].destination = &(s->max_keep_alive_requests);
 		cv[11].destination = &(s->split_hostnames);
+		cv[12].destination = &(s->work_with_modcache);
 
 		buffer_reset(p->balance_buf);
 
@@ -1258,6 +1262,8 @@ static int proxy_get_request_header(server *srv, connection *con, plugin_data *p
 		if (buffer_is_equal_string(ds->key, CONST_STR_LEN("Connection"))) continue;
 		if (buffer_is_equal_string(ds->key, CONST_STR_LEN("Keep-Alive"))) continue;
 		if (buffer_is_equal_string(ds->key, CONST_STR_LEN("Expect"))) continue;
+		if (p->conf.work_with_modcache && con->remove_range_request_header &&
+				buffer_is_equal_string(ds->key, CONST_STR_LEN("Range")))  continue;
 #ifdef HAVE_PCRE_H
 		for (k = 0; k < p->conf.request_rewrites->used; k++) {
 			proxy_rewrite *rw = p->conf.request_rewrites->ptr[k];
@@ -2039,6 +2045,7 @@ static int mod_proxy_core_patch_connection(server *srv, connection *con, plugin_
 	PATCH_OPTION(check_local);
 	PATCH_OPTION(split_hostnames);
 	PATCH_OPTION(max_keep_alive_requests);
+	PATCH_OPTION(work_with_modcache);
 
 	/* skip the first, the global context */
 	for (i = 1; i < srv->config_context->used; i++) {
@@ -2072,6 +2079,8 @@ static int mod_proxy_core_patch_connection(server *srv, connection *con, plugin_
 				PATCH_OPTION(allow_x_rewrite);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_PROXY_CORE_MAX_POOL_SIZE))) {
 				PATCH_OPTION(max_pool_size);
+			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_PROXY_CORE_WORKED_WITH_MODCACHE))) {
+				PATCH_OPTION(work_with_modcache);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_PROXY_CORE_CHECK_LOCAL))) {
 				PATCH_OPTION(check_local);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_PROXY_CORE_SPLIT_HOSTNAMES))) {
@@ -2147,6 +2156,8 @@ static int mod_proxy_core_check_match(server *srv, connection *con, plugin_data 
 		proxy_session_reset(sess);
 	}
 
+	if (p->conf.work_with_modcache && con->use_cache_file) return HANDLER_GO_ON;
+
 	/* make sure we have a protocol. */
 	if (p->conf.protocol == NULL) {
 		con->http_status = 500; /* internal error */
@@ -2174,6 +2185,8 @@ static int mod_proxy_core_check_match(server *srv, connection *con, plugin_data 
 	}
 	sess->p = p;
 	sess->remote_con = con;
+
+	if (p->conf.work_with_modcache ) con->write_cache_file = 1;
 
 	return HANDLER_FINISHED;
 }
