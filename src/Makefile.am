@@ -111,6 +111,11 @@ mod_evasive_la_SOURCES = mod_evasive.c
 mod_evasive_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_evasive_la_LIBADD = $(common_libadd)
 
+lib_LTLIBRARIES += mod_cache.la
+mod_cache_la_SOURCES = mod_cache.c
+mod_cache_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_cache_la_LIBADD = $(common_libadd) $(Z_LIB)
+
 lib_LTLIBRARIES += mod_webdav.la
 mod_webdav_la_SOURCES = mod_webdav.c
 mod_webdav_la_CFLAGS = $(AM_CFLAGS) $(XML_CFLAGS) $(SQLITE_CFLAGS) 

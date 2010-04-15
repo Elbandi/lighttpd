@@ -64,6 +64,7 @@ LI_API int chunkqueue_set_tempdirs(chunkqueue *c, array *tempdirs);
 LI_API int chunkqueue_append_file(chunkqueue *c, buffer *fn, off_t offset, off_t len);
 LI_API int chunkqueue_append_mem(chunkqueue *c, const char *mem, size_t len);
 LI_API int chunkqueue_append_buffer(chunkqueue *c, buffer *mem);
+LI_API int chunkqueue_append_shared_buffer(chunkqueue *c, buffer *mem);
 LI_API int chunkqueue_prepend_buffer(chunkqueue *c, buffer *mem);
 
 LI_API buffer * chunkqueue_get_append_buffer(chunkqueue *c);

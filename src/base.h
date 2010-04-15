@@ -461,6 +461,15 @@ typedef struct {
 #endif
 
 	int conditional_is_valid[COMP_LAST_ELEMENT];
+	
+	/* two control flag for mod_cache. */
+	/* flag to use cache file, set in mod_cache, used by other modules*/
+	int use_cache_file;
+	/* flag to write cache file, set in mod_proxy or mod_fastcgi,
+	 * if it set to 1, mod_cache will try to save response to cache file
+	 */
+	int write_cache_file;
+	int remove_range_request_header;
 } connection;
 
 typedef struct {

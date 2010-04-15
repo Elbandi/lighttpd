@@ -13,6 +13,7 @@ typedef struct {
 
 	size_t used;
 	size_t size;
+	size_t ref_count;
 } buffer;
 
 typedef void (*buffer_ptr_free_t)(void *p);

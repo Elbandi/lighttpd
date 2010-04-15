@@ -19,13 +19,8 @@ static const char hex_chars[] = "0123456789abcdef";
 buffer* buffer_init(void) {
 	buffer *b;
 
-	b = malloc(sizeof(*b));
+	b = (buffer *) calloc(sizeof(buffer), 1);
 	assert(b);
-
-	b->ptr = NULL;
-	b->size = 0;
-	b->used = 0;
-
 	return b;
 }
 
@@ -43,23 +38,23 @@ buffer *buffer_init_buffer(buffer *src) {
 void buffer_free(buffer *b) {
 	if (!b) return;
 
-	free(b->ptr);
-	free(b);
+	if (b->ref_count <= 1) {
+		free(b->ptr);
+		free(b);
+	} else {
+		b->ref_count --;
+	}
 }
 
 void buffer_reset(buffer *b) {
 	if (!b) return;
 
-	/* limit don't reuse buffer larger than ... bytes */
-	if (b->size > BUFFER_MAX_REUSE_SIZE) {
+	if (b->ref_count == 0) {
 		free(b->ptr);
 		b->ptr = NULL;
 		b->size = 0;
-	} else if (b->size) {
-		b->ptr[0] = '\0';
+		b->used = 0;
 	}
-
-	b->used = 0;
 }
 
 

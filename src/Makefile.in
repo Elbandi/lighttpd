@@ -157,6 +157,12 @@ mod_cgi_la_OBJECTS = $(am_mod_cgi_la_OBJECTS)
 mod_cgi_la_LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
 	$(mod_cgi_la_LDFLAGS) $(LDFLAGS) -o $@
+mod_cache_la_DEPENDENCIES = $(am__DEPENDENCIES_2)
+am_mod_cache_la_OBJECTS = mod_cache.lo
+mod_cache_la_OBJECTS = $(am_mod_cache_la_OBJECTS)
+mod_cache_la_LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) \
+	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
+	$(mod_cache_la_LDFLAGS) $(LDFLAGS) -o $@
 mod_chunked_la_DEPENDENCIES = $(am__DEPENDENCIES_2)
 am_mod_chunked_la_OBJECTS = mod_chunked.lo
 mod_chunked_la_OBJECTS = $(am_mod_chunked_la_OBJECTS)
@@ -464,7 +470,7 @@ LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) \
 	$(LDFLAGS) -o $@
 SOURCES = $(liblightcomp_la_SOURCES) $(mod_access_la_SOURCES) \
 	$(mod_accesslog_la_SOURCES) $(mod_alias_la_SOURCES) \
-	$(mod_auth_la_SOURCES) $(mod_cgi_la_SOURCES) \
+	$(mod_auth_la_SOURCES) $(mod_cache_la_SOURCES) $(mod_cgi_la_SOURCES) \
 	$(mod_chunked_la_SOURCES) $(mod_compress_la_SOURCES) \
 	$(mod_deflate_la_SOURCES) $(mod_dirlisting_la_SOURCES) \
 	$(mod_evasive_la_SOURCES) $(mod_evhost_la_SOURCES) \
@@ -490,7 +496,7 @@ SOURCES = $(liblightcomp_la_SOURCES) $(mod_access_la_SOURCES) \
 DIST_SOURCES = $(am__liblightcomp_la_SOURCES_DIST) \
 	$(mod_access_la_SOURCES) $(mod_accesslog_la_SOURCES) \
 	$(mod_alias_la_SOURCES) $(mod_auth_la_SOURCES) \
-	$(mod_cgi_la_SOURCES) $(mod_chunked_la_SOURCES) \
+	$(mod_cache_la_SOURCES) $(mod_cgi_la_SOURCES) $(mod_chunked_la_SOURCES) \
 	$(mod_compress_la_SOURCES) $(mod_deflate_la_SOURCES) \
 	$(mod_dirlisting_la_SOURCES) $(mod_evasive_la_SOURCES) \
 	$(mod_evhost_la_SOURCES) $(mod_expire_la_SOURCES) \
@@ -724,7 +730,7 @@ lib_LTLIBRARIES = $(am__append_1) mod_flv_streaming.la \
 	mod_proxy_backend_ajp13.la mod_ssi.la mod_secdownload.la \
 	mod_expire.la mod_evhost.la mod_simple_vhost.la mod_access.la \
 	mod_compress.la mod_auth.la mod_rewrite.la mod_redirect.la \
-	mod_status.la mod_accesslog.la
+	mod_status.la mod_accesslog.la mod_cache.la
 @NO_RDYNAMIC_TRUE@liblightcomp_la_SOURCES = $(common_src)
 @NO_RDYNAMIC_TRUE@liblightcomp_la_CFLAGS = $(AM_CFLAGS)
 @NO_RDYNAMIC_TRUE@liblightcomp_la_LDFLAGS = -avoid-version -no-undefined
@@ -740,6 +746,9 @@ mod_uploadprogress_la_LIBADD = $(common_libadd)
 mod_evasive_la_SOURCES = mod_evasive.c
 mod_evasive_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_evasive_la_LIBADD = $(common_libadd)
+mod_cache_la_SOURCES = mod_cache.c
+mod_cache_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_cache_la_LIBADD = $(common_libadd) $(Z_LIB)
 mod_webdav_la_SOURCES = mod_webdav.c
 mod_webdav_la_CFLAGS = $(AM_CFLAGS) $(XML_CFLAGS) $(SQLITE_CFLAGS) 
 mod_webdav_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
@@ -982,6 +991,8 @@ mod_alias.la: $(mod_alias_la_OBJECTS) $(mod_alias_la_DEPENDENCIES)
 	$(mod_alias_la_LINK) -rpath $(libdir) $(mod_alias_la_OBJECTS) $(mod_alias_la_LIBADD) $(LIBS)
 mod_auth.la: $(mod_auth_la_OBJECTS) $(mod_auth_la_DEPENDENCIES) 
 	$(mod_auth_la_LINK) -rpath $(libdir) $(mod_auth_la_OBJECTS) $(mod_auth_la_LIBADD) $(LIBS)
+mod_cache.la: $(mod_cache_la_OBJECTS) $(mod_cache_la_DEPENDENCIES) 
+	$(mod_cache_la_LINK) -rpath $(libdir) $(mod_cache_la_OBJECTS) $(mod_cache_la_LIBADD) $(LIBS)
 mod_cgi.la: $(mod_cgi_la_OBJECTS) $(mod_cgi_la_DEPENDENCIES) 
 	$(mod_cgi_la_LINK) -rpath $(libdir) $(mod_cgi_la_OBJECTS) $(mod_cgi_la_LIBADD) $(LIBS)
 mod_chunked.la: $(mod_chunked_la_OBJECTS) $(mod_chunked_la_DEPENDENCIES) 
@@ -1196,6 +1207,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_accesslog.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_alias.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_auth.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_cache.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_cgi.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_chunked.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_compress.Plo@am__quote@
