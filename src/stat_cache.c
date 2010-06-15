@@ -481,24 +481,31 @@ handler_t stat_cache_get_entry(server *srv, connection *con, buffer *name, stat_
 	 * - stat() if regular file + open() to see if we can read from it is better
 	 *
 	 * */
-	if (-1 == stat(name->ptr, &st)) {
+	/* fix broken stat/open for symlinks to reg files with appended slash on freebsd,osx */
+	if (name->ptr[name->used-2] == '/') {
+		errno = ENOTDIR;
 		return HANDLER_ERROR;
 	}
-
-
-	if (S_ISREG(st.st_mode)) {
-		/* fix broken stat/open for symlinks to reg files with appended slash on freebsd,osx */
-		if (name->ptr[name->used-2] == '/') {
-			errno = ENOTDIR;
+	/*
+	 * O_NONBLOCK skips named pipes and locked files
+	 *
+	 * O_NOATIME leads to EPERM on SYMLINKS
+	 * */
+	if (-1 == (fd = open(name->ptr, O_NONBLOCK | O_RDONLY | (srv->srvconf.use_noatime ? O_NOATIME : 0)))) {
+		if (srv->srvconf.use_noatime && errno == EPERM) {
+			if (-1 == (fd = open(name->ptr, O_NONBLOCK | O_RDONLY))) {
+				return HANDLER_ERROR;
+			}
+		} else {
 			return HANDLER_ERROR;
 		}
-
-		/* try to open the file to check if we can read it */
-		if (-1 == (fd = open(name->ptr, O_RDONLY))) {
-			return HANDLER_ERROR;
-		}
-		close(fd);
 	}
+
+	if (-1 == fstat(fd, &st)) {
+		close(fd);
+		return HANDLER_ERROR;
+	}
+	close(fd);
 
 	if (NULL == sce) {
 #ifdef DEBUG_STAT_CACHE

@@ -233,7 +233,7 @@ int network_write_chunkqueue_writev(server *srv, connection *con, int fd, chunkq
 				}
 
 				if (-1 == c->file.fd) {  /* open the file if not already open */
-					if (-1 == (c->file.fd = open(c->file.name->ptr, O_RDONLY))) {
+					if (-1 == (c->file.fd = open(c->file.name->ptr, O_RDONLY | (srv->srvconf.use_noatime ? O_NOATIME : 0)))) {
 						log_error_write(srv, __FILE__, __LINE__, "sbs", "open failed for:", c->file.name, strerror(errno));
 
 						return -1;

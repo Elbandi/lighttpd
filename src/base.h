@@ -514,6 +514,8 @@ typedef struct {
 	array *modules;
 	array *upload_tempdirs;
 
+	unsigned short use_noatime;
+
 	unsigned short max_worker;
 	unsigned short max_fds;
 	unsigned short max_conns;
