@@ -52,7 +52,9 @@ int chunkqueue_set_tempdirs(chunkqueue *c, array *tempdirs);
 int chunkqueue_append_file(chunkqueue *c, buffer *fn, off_t offset, off_t len);
 int chunkqueue_append_mem(chunkqueue *c, const char *mem, size_t len);
 int chunkqueue_append_buffer(chunkqueue *c, buffer *mem);
+int chunkqueue_append_shared_buffer(chunkqueue *c, buffer *mem);
 int chunkqueue_append_buffer_weak(chunkqueue *c, buffer *mem);
+int chunkqueue_append_chunkqueue(chunkqueue *cq, chunkqueue *src);
 int chunkqueue_prepend_buffer(chunkqueue *c, buffer *mem);
 
 buffer * chunkqueue_get_append_buffer(chunkqueue *c);
@@ -67,5 +69,12 @@ void chunkqueue_free(chunkqueue *c);
 void chunkqueue_reset(chunkqueue *c);
 
 int chunkqueue_is_empty(chunkqueue *c);
+
+
+int chunk_encode_append_mem(chunkqueue *cq, const char * mem, size_t len);
+int chunk_encode_append_buffer(chunkqueue *cq, buffer *mem);
+int chunk_encode_append_file(chunkqueue *cq, buffer *fn, off_t offset, off_t len);
+int chunk_encode_append_queue(chunkqueue *cq, chunkqueue *src);
+int chunk_encode_end(chunkqueue *cq);
 
 #endif

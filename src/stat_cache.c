@@ -225,7 +225,7 @@ static int stat_cache_attr_get(buffer *buf, char *name) {
 #endif
 
 /* the famous DJB hash function for strings */
-static uint32_t hashme(buffer *str) {
+uint32_t hashme(buffer *str) {
 	uint32_t hash = 5381;
 	const char *s;
 	for (s = str->ptr; *s; s++) {

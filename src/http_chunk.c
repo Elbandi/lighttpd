@@ -58,15 +58,8 @@ int http_chunk_append_file(server *srv, connection *con, buffer *fn, off_t offse
 
 	cq = con->write_queue;
 
-	if (con->response.transfer_encoding & HTTP_TRANSFER_ENCODING_CHUNKED) {
-		http_chunk_append_len(srv, con, len);
-	}
 
 	chunkqueue_append_file(cq, fn, offset, len);
-
-	if (con->response.transfer_encoding & HTTP_TRANSFER_ENCODING_CHUNKED && len > 0) {
-		chunkqueue_append_mem(cq, "\r\n", 2 + 1);
-	}
 
 	return 0;
 }
@@ -78,15 +71,8 @@ int http_chunk_append_buffer(server *srv, connection *con, buffer *mem) {
 
 	cq = con->write_queue;
 
-	if (con->response.transfer_encoding & HTTP_TRANSFER_ENCODING_CHUNKED) {
-		http_chunk_append_len(srv, con, mem->used - 1);
-	}
 
 	chunkqueue_append_buffer(cq, mem);
-
-	if (con->response.transfer_encoding & HTTP_TRANSFER_ENCODING_CHUNKED && mem->used > 0) {
-		chunkqueue_append_mem(cq, "\r\n", 2 + 1);
-	}
 
 	return 0;
 }
@@ -99,23 +85,10 @@ int http_chunk_append_mem(server *srv, connection *con, const char * mem, size_t
 	cq = con->write_queue;
 
 	if (len == 0) {
-		if (con->response.transfer_encoding & HTTP_TRANSFER_ENCODING_CHUNKED) {
-			chunkqueue_append_mem(cq, "0\r\n\r\n", 5 + 1);
-		} else {
-			chunkqueue_append_mem(cq, "", 1);
-		}
 		return 0;
 	}
 
-	if (con->response.transfer_encoding & HTTP_TRANSFER_ENCODING_CHUNKED) {
-		http_chunk_append_len(srv, con, len - 1);
-	}
-
 	chunkqueue_append_mem(cq, mem, len);
-
-	if (con->response.transfer_encoding & HTTP_TRANSFER_ENCODING_CHUNKED) {
-		chunkqueue_append_mem(cq, "\r\n", 2 + 1);
-	}
 
 	return 0;
 }

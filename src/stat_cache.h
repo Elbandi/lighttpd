@@ -10,4 +10,5 @@ handler_t stat_cache_get_entry(server *srv, connection *con, buffer *name, stat_
 handler_t stat_cache_handle_fdevent(void *_srv, void *_fce, int revent);
 
 int stat_cache_trigger_cleanup(server *srv);
+uint32_t hashme(buffer *str);
 #endif

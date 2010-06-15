@@ -244,7 +244,7 @@ buffer * strftime_cache_get(server *srv, time_t last_mod) {
 }
 
 
-int http_response_handle_cachable(server *srv, connection *con, buffer *mtime) {
+int http_response_handle_cachable(server *srv, connection *con, buffer *mtime, buffer *etag) {
 	/*
 	 * 14.26 If-None-Match
 	 *    [...]
@@ -256,8 +256,8 @@ int http_response_handle_cachable(server *srv, connection *con, buffer *mtime) {
 	 */
 
 	/* last-modified handling */
-	if (con->request.http_if_none_match) {
-		if (etag_is_equal(con->physical.etag, con->request.http_if_none_match)) {
+	if (con->use_cache_file == 0 && con->request.http_if_none_match) {
+		if (etag_is_equal(etag, con->request.http_if_none_match)) {
 			if (con->request.http_method == HTTP_METHOD_GET ||
 			    con->request.http_method == HTTP_METHOD_HEAD) {
 

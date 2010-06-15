@@ -128,6 +128,11 @@ mod_trigger_b4_dl_la_SOURCES = mod_trigger_b4_dl.c
 mod_trigger_b4_dl_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_trigger_b4_dl_la_LIBADD = $(GDBM_LIB) $(MEMCACHE_LIB) $(PCRE_LIB) $(common_libadd)
 
+lib_LTLIBRARIES += mod_cache.la
+mod_cache_la_SOURCES = mod_cache.c
+mod_cache_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_cache_la_LIBADD = $(Z_LIB) $(common_libadd)
+
 lib_LTLIBRARIES += mod_mysql_vhost.la
 mod_mysql_vhost_la_SOURCES = mod_mysql_vhost.c
 mod_mysql_vhost_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
@@ -143,6 +148,16 @@ lib_LTLIBRARIES += mod_scgi.la
 mod_scgi_la_SOURCES = mod_scgi.c
 mod_scgi_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
 mod_scgi_la_LIBADD = $(common_libadd)
+
+lib_LTLIBRARIES += mod_mem_cache.la
+mod_mem_cache_la_SOURCES = mod_mem_cache.c
+mod_mem_cache_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_mem_cache_la_LIBADD = $(common_libadd)
+
+lib_LTLIBRARIES += mod_mem_compress.la
+mod_mem_compress_la_SOURCES = mod_mem_compress.c
+mod_mem_compress_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
+mod_mem_compress_la_LIBADD = $(Z_LIB) $(common_libadd)
 
 lib_LTLIBRARIES += mod_staticfile.la
 mod_staticfile_la_SOURCES = mod_staticfile.c
