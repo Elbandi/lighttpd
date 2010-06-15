@@ -531,6 +531,7 @@ typedef struct {
 			, STAT_CACHE_ENGINE_FAM
 #endif
 	} stat_cache_engine;
+	unsigned short stat_cache_simple_timeout;
 	unsigned short enable_cores;
 	unsigned short reject_expect_100_with_417;
 } server_config;
