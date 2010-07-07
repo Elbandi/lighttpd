@@ -1,6 +1,3 @@
-#include <GeoIP.h>
-#include <GeoIPCity.h>
-
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +11,11 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#ifdef HAVE_GEOIP_H
+#include <GeoIP.h>
+#include <GeoIPCity.h>
+
 
 /**
  *
@@ -414,3 +416,10 @@ int mod_geoip_plugin_init(plugin *p) {
 
 	return 0;
 }
+#else
+int mod_geoip_plugin_init(plugin *p);
+int mod_geoip_plugin_init(plugin *p) {
+        UNUSED(p);
+        return -1;
+}
+#endif

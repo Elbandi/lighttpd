@@ -391,6 +391,23 @@ if test "$WITH_GDBM" != "no"; then
  AC_SUBST(GDBM_LIB)
 fi
 
+dnl Check for geoip
+AC_MSG_CHECKING(for geoip)
+AC_ARG_WITH(geoip, AC_HELP_STRING([--with-geoip],[geoip support for fast ip/location lookups]),
+[WITH_GEOIP=$withval],[WITH_GEOIP=no])
+AC_MSG_RESULT([$WITH_GEOIP])
+
+if test "$WITH_GEOIP" != "no"; then
+ AC_CHECK_LIB(GeoIP, GeoIP_open, [
+         AC_CHECK_HEADERS([GeoIP.h],[
+                 GEOIP_LIB=-lGeoIP
+                 AC_DEFINE([HAVE_GEOIP], [1], [libgeoip])
+		 AC_DEFINE([HAVE_GEOIP_H], [1])
+         ])
+ ])
+ AC_SUBST(GEOIP_LIB)
+fi
+
 dnl Check for memcache
 AC_MSG_CHECKING(for memcache)
 AC_ARG_WITH(memcache, AC_HELP_STRING([--with-memcache],[memcached storage for mod_trigger_b4_dl]),
@@ -607,6 +624,13 @@ fi
 
 features="storage-gdbm"
 if test ! "x$GDBM_LIB" = x; then
+	enable_feature="$enable_feature $features"
+else
+	disable_feature="$disable_feature $features"
+fi
+
+features="storage-geoip"
+if test ! "x$GEOIP_LIB" = x; then
 	enable_feature="$enable_feature $features"
 else
 	disable_feature="$disable_feature $features"

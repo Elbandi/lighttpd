@@ -15,6 +15,7 @@ build-stamp:
 		--srcdir=.   --libdir=/usr/lib/lighttpd --with-openssl \
 		--with-kerberos5 --with-pcre --with-fam --with-ldap \
 		--with-mysql --with-memcache --with-lua=lua5.1 --with-gdbm \
+		--with-geoip \
 		--with-attr --with-webdav-locks --with-webdav-props
 	dh build --after auto_configure
 	touch $@

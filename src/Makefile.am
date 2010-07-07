@@ -282,7 +282,7 @@ mod_accesslog_la_LIBADD = $(common_libadd)
 lib_LTLIBRARIES += mod_geoip.la
 mod_geoip_la_SOURCES = mod_geoip.c
 mod_geoip_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_geoip_la_LIBADD = $(common_libadd) -lGeoIP
+mod_geoip_la_LIBADD = $(common_libadd) $(GEOIP_LIB)
 
 hdr = server.h buffer.h network.h log.h keyvalue.h \
       response.h request.h fastcgi.h chunk.h \
