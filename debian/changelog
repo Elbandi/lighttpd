@@ -1,3 +1,17 @@
+lighttpd (1.4.26-1.1ubuntu3-0elbandi1) hardy; urgency=low
+
+  [ Andras Elso ]
+  * backport noatime feature from 1.5
+  * Added stat cache simple timeout
+  * Add geoip module
+  * Check for geoip library in configure script
+  * new handler for 410 error
+  * mod_fastcgi use X-LIGHTTPD-KBytes-per-second header
+  * allow purge item from mem_cache
+  * add new modules to debian package
+
+ -- Andras Elso <elso.andras@gmail.com>  Fri, 10 Dec 2010 03:41:49 +0100
+
 lighttpd (1.4.26-1.1ubuntu3) lucid; urgency=low
 
   * debian/control: Rebuild for libmysqlclient transition. 
