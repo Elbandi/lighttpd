@@ -34,6 +34,10 @@ SUCH DAMAGE.
 #include <sys/mman.h>
 #include <stdint.h>
 
+#if defined(HAVE_PCRE_H)
+#include <pcre.h>
+#endif
+
 #include "base.h"
 #include "log.h"
 #include "buffer.h"
@@ -42,6 +46,7 @@ SUCH DAMAGE.
 
 #include "stat_cache.h"
 #include "etag.h"
+#include "inet_ntop_cache.h"
 #include "response.h"
 #include "status_counter.h"
 
@@ -58,6 +63,7 @@ SUCH DAMAGE.
 #define CONFIG_MEM_CACHE_EXPIRE_TIME "mem-cache.expire-time"
 #define CONFIG_MEM_CACHE_FILE_TYPES "mem-cache.filetypes"
 #define CONFIG_MEM_CACHE_SLRU_THRESOLD "mem-cache.slru-thresold"
+#define CONFIG_MEM_CACHE_PURGE_HOST "mem-cache.purge-host"
 
 #define MEMCACHE_USED "mem-cache.used-memory(MB)"
 #define MEMCACHE_ITEMS "mem-cache.cached-items"
@@ -73,6 +79,10 @@ typedef struct
 	int32_t maxmemory_2;
 	uint32_t maxfilesize; /* maxium file size will put into memory */
 	unsigned int expires;
+	buffer *purgehost;
+#if defined(HAVE_PCRE_H)
+	pcre *purgehost_regex; /* mem-cache.purgehost regex */
+#endif
 	array  *filetypes;
 } plugin_config;
 
@@ -455,6 +465,10 @@ FREE_FUNC(mod_mem_cache_free)
 			
 			if (!s) continue;
 			array_free(s->filetypes);
+#if defined(HAVE_PCRE_H)
+			if (s->purgehost_regex) pcre_free(s->purgehost_regex);
+#endif
+			buffer_free(s->purgehost);
 			free(s);
 		}
 		free(p->config_storage);
@@ -489,6 +503,7 @@ SETDEFAULTS_FUNC(mod_mem_cache_set_defaults)
 		{ CONFIG_MEM_CACHE_EXPIRE_TIME, NULL, T_CONFIG_SHORT, T_CONFIG_SCOPE_CONNECTION },       /* 4 */
 		{ CONFIG_MEM_CACHE_FILE_TYPES, NULL, T_CONFIG_ARRAY, T_CONFIG_SCOPE_CONNECTION },       /* 5 */
 		{ CONFIG_MEM_CACHE_SLRU_THRESOLD, NULL, T_CONFIG_SHORT, T_CONFIG_SCOPE_CONNECTION },       /* 6 */
+		{ CONFIG_MEM_CACHE_PURGE_HOST, NULL, T_CONFIG_STRING, T_CONFIG_SCOPE_CONNECTION }, /* 7 */
 		{ NULL,                         NULL, T_CONFIG_UNSET, T_CONFIG_SCOPE_UNSET }
 	};
 	
@@ -498,6 +513,10 @@ SETDEFAULTS_FUNC(mod_mem_cache_set_defaults)
 	
 	for (i = 0; i < srv->config_context->used; i++) {
 		plugin_config *s;
+#if defined(HAVE_PCRE_H)
+		const char *errptr;
+		int erroff;
+#endif
 		
 		s = calloc(1, sizeof(plugin_config));
 		s->maxmemory_2 = 256; /* 256M default */
@@ -505,6 +524,10 @@ SETDEFAULTS_FUNC(mod_mem_cache_set_defaults)
 		s->lru_remove_count = 200; /* default 200 */
 		s->enable = 1; /* default to cache content into memory */
 		s->expires = 0; /* default to check stat at every request */
+		s->purgehost = buffer_init();
+#if defined(HAVE_PCRE_H)
+		s->purgehost_regex = NULL;
+#endif
 		s->filetypes = array_init();
 		s->thresold = 0; /* 0 just like normal LRU algorithm */
 		
@@ -515,6 +538,7 @@ SETDEFAULTS_FUNC(mod_mem_cache_set_defaults)
 		cv[4].destination = &(s->expires);
 		cv[5].destination = s->filetypes;
 		cv[6].destination = &(s->thresold);
+		cv[7].destination = s->purgehost;
 		
 		p->config_storage[i] = s;
 	
@@ -532,6 +556,17 @@ SETDEFAULTS_FUNC(mod_mem_cache_set_defaults)
 		if (s->maxmemory_2 <= 0) s->maxmemory_2 = 256; /* 256M */
 		s->maxmemory = s->maxmemory_2;
 		s->maxmemory *= 1024*1024; /* MBytes */
+
+#if defined(HAVE_PCRE_H)
+		if (!buffer_is_empty(s->purgehost)) {
+			s->purgehost_regex = pcre_compile(s->purgehost->ptr, 0, &errptr, &erroff, NULL);
+			if (s->purgehost_regex == NULL) {
+				log_error_write(srv, __FILE__, __LINE__, "sbss", "compiling regex for purge-host failed:",
+						s->purgehost, "pos:", erroff);
+				return HANDLER_ERROR;
+			}
+		}
+#endif
 
 		if (srv->srvconf.max_worker > 0)
 			s->maxmemory /= srv->srvconf.max_worker;
@@ -557,6 +592,9 @@ mod_mem_cache_patch_connection(server *srv, connection *con, plugin_data *p)
 	PATCH_OPTION(lru_remove_count);
 	PATCH_OPTION(enable);
 	PATCH_OPTION(expires);
+#if defined(HAVE_PCRE_H)
+	PATCH_OPTION(purgehost_regex);
+#endif
 	PATCH_OPTION(filetypes);
 	PATCH_OPTION(thresold);
 	
@@ -582,6 +620,10 @@ mod_mem_cache_patch_connection(server *srv, connection *con, plugin_data *p)
 				PATCH_OPTION(filetypes);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_MEM_CACHE_EXPIRE_TIME))) {
 				PATCH_OPTION(expires);
+			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_MEM_CACHE_PURGE_HOST))) {
+#if defined(HAVE_PCRE_H)
+				PATCH_OPTION(purgehost_regex);
+#endif
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_MEM_CACHE_LRU_REMOVE_COUNT))) {
 				PATCH_OPTION(lru_remove_count);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN(CONFIG_MEM_CACHE_SLRU_THRESOLD))) {
@@ -829,6 +871,10 @@ mod_mem_cache_uri_handler(server *srv, connection *con, void *p_d)
 	stat_cache_entry *sce = NULL;
 	buffer *mtime;
 	data_string *ds;
+#if defined(HAVE_PCRE_H)
+# define N 10
+	int ovec[N * 3];
+#endif
 	struct cache_entry *cache = NULL;
 	
 	/* someone else has done a decision for us */
@@ -844,8 +890,9 @@ mod_mem_cache_uri_handler(server *srv, connection *con, void *p_d)
 	if (con->send->is_closed) return HANDLER_GO_ON;
 #endif
 
-	/* we only handle GET, POST and HEAD */
+	/* we only handle PURGE, GET, POST and HEAD */
 	switch(con->request.http_method) {
+	case HTTP_METHOD_PURGE:
 	case HTTP_METHOD_GET:
 	case HTTP_METHOD_POST:
 	case HTTP_METHOD_HEAD:
@@ -867,6 +914,40 @@ mod_mem_cache_uri_handler(server *srv, connection *con, void *p_d)
 
 	hash = hashme(con->physical.path);
 	cache = check_memcache(srv, con, &success, hash);
+
+	if (con->request.http_method == HTTP_METHOD_PURGE)
+	{
+		/* handle PURGE command
+		 * PURGE http://www.xxx.com/abc HTTP/1.0
+		 * or PURGE /abc HTTP/1.1\r\nHOST: www.xxx.com\r\n\r\n
+		 */
+
+		char *remote_ip = (char *) inet_ntop_cache_get_ip(srv, &(con->dst_addr));
+
+		/* hardcoded 10.0.0.0/8 and 127.0.0.1/32 allow host */
+		if (strncmp(remote_ip, "10.", 3) == 0 || strcmp(remote_ip, "127.0.0.1") == 0
+#if defined(HAVE_PCRE_H)
+		    || (p->conf.purgehost_regex &&
+		            pcre_exec(p->conf.purgehost_regex, NULL, remote_ip, strlen(remote_ip), 0, 0, ovec, 3 * N) > 0)
+#endif
+		    ) {
+			/* try local memory storage first */
+			if (success == 1 && cache != NULL) {
+				cache->ct = 0;
+			}
+			con->http_status = 200;
+		} else {
+			log_error_write(srv, __FILE__,__LINE__, "ss","don't allow PURGE from ip", remote_ip);
+			con->http_status = 403;
+		}
+#ifdef LIGHTTPD_V14
+		con->file_finished = 1;
+#else
+		con->send->is_closed = 1;
+#endif
+		return HANDLER_FINISHED;
+	}
+
 	reqcount ++;
 
 	if (success == 0 || cache == NULL) {

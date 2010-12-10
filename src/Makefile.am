@@ -152,7 +152,7 @@ mod_scgi_la_LIBADD = $(common_libadd)
 lib_LTLIBRARIES += mod_mem_cache.la
 mod_mem_cache_la_SOURCES = mod_mem_cache.c
 mod_mem_cache_la_LDFLAGS = -module -export-dynamic -avoid-version -no-undefined
-mod_mem_cache_la_LIBADD = $(common_libadd)
+mod_mem_cache_la_LIBADD = $(common_libadd) $(PCRE_LIB)
 
 lib_LTLIBRARIES += mod_mem_compress.la
 mod_mem_compress_la_SOURCES = mod_mem_compress.c
