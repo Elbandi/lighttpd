@@ -750,6 +750,7 @@ connection *connection_init(server *srv) {
 	CLEAN(authed_user);
 	CLEAN(server_name);
 	CLEAN(error_handler);
+	CLEAN(error_handler_410);
 	CLEAN(dst_addr_buf);
 #if defined USE_OPENSSL && ! defined OPENSSL_NO_TLSEXT
 	CLEAN(tlsext_server_name);
@@ -819,6 +820,7 @@ void connections_free(server *srv) {
 		CLEAN(authed_user);
 		CLEAN(server_name);
 		CLEAN(error_handler);
+		CLEAN(error_handler_410);
 		CLEAN(dst_addr_buf);
 #if defined USE_OPENSSL && ! defined OPENSSL_NO_TLSEXT
 		CLEAN(tlsext_server_name);
@@ -897,6 +899,7 @@ int connection_reset(server *srv, connection *con) {
 	CLEAN(authed_user);
 	CLEAN(server_name);
 	CLEAN(error_handler);
+	CLEAN(error_handler_410);
 #if defined USE_OPENSSL && ! defined OPENSSL_NO_TLSEXT
 	CLEAN(tlsext_server_name);
 #endif
@@ -943,6 +946,7 @@ int connection_reset(server *srv, connection *con) {
 
 	con->header_len = 0;
 	con->in_error_handler = 0;
+	con->in_error_handler_410 = 0;
 
 	config_setup_connection(srv, con);
 
@@ -1546,6 +1550,41 @@ int connection_state_machine(server *srv, connection *con) {
 						/* error-handler is back and has generated content */
 						/* if Status: was set, take it otherwise use 200 */
 					}
+
+					if (con->http_status == 410) {
+						/* hst error-handler */
+
+						if (con->in_error_handler_410 == 0 &&
+						    (!buffer_is_empty(con->conf.error_handler_410) ||
+						     !buffer_is_empty(con->error_handler_410))) {
+							/* call hst error-handler */
+
+							con->error_handler_410_saved_status = con->http_status;
+							con->http_status = 0;
+
+							if (buffer_is_empty(con->error_handler_410)) {
+								buffer_copy_string_buffer(con->request.uri, con->conf.error_handler_410);
+							} else {
+								buffer_copy_string_buffer(con->request.uri, con->error_handler_410);
+							}
+							buffer_reset(con->physical.path);
+
+							con->in_error_handler_410 = 1;
+
+							connection_set_state(srv, con, CON_STATE_HANDLE_REQUEST);
+
+							done = -1;
+							break;
+						} else if (con->in_error_handler_410) {
+							/* hst error-handler is a 410 */
+
+							con->http_status = con->error_handler_410_saved_status;
+						}
+					} else if (con->in_error_handler_410) {
+						/* error-handler is back and has generated content */
+						/* if Status: was set, take it otherwise use 200 */
+					}
+
 				}
 				if (con->http_status == 0) con->http_status = 200;
 

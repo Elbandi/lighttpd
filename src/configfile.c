@@ -102,6 +102,7 @@ static int config_insert(server *srv) {
 		{ "ssl.verifyclient.exportcert", NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_SERVER },     /* 60 */
 		{ "server.use-noatime",          NULL, T_CONFIG_BOOLEAN, T_CONFIG_SCOPE_CONNECTION }, /* 61 */
 		{ "server.stat-cache-simple-timeout", NULL, T_CONFIG_SHORT, T_CONFIG_SCOPE_CONNECTION },  /* 62 */
+		{ "server.error-handler-410",    NULL, T_CONFIG_STRING, T_CONFIG_SCOPE_CONNECTION },  /* 63 */
 		{ "server.host",                 "use server.bind instead", T_CONFIG_DEPRECATED, T_CONFIG_SCOPE_UNSET },
 		{ "server.docroot",              "use server.document-root instead", T_CONFIG_DEPRECATED, T_CONFIG_SCOPE_UNSET },
 		{ "server.virtual-root",         "load mod_simple_vhost and use simple-vhost.server-root instead", T_CONFIG_DEPRECATED, T_CONFIG_SCOPE_UNSET },
@@ -164,6 +165,7 @@ static int config_insert(server *srv) {
 		s->ssl_pemfile   = buffer_init();
 		s->ssl_ca_file   = buffer_init();
 		s->error_handler = buffer_init();
+		s->error_handler_410 = buffer_init();
 		s->server_tag    = buffer_init();
 		s->ssl_cipher_list = buffer_init();
 		s->errorfile_prefix = buffer_init();
@@ -212,6 +214,7 @@ static int config_insert(server *srv) {
 		cv[20].destination = &(s->max_read_idle);
 		cv[21].destination = &(s->max_write_idle);
 		cv[22].destination = s->error_handler;
+		cv[63].destination = s->error_handler_410;
 #ifdef HAVE_LSTAT
 		cv[24].destination = &(s->follow_symlink);
 #endif
@@ -294,6 +297,7 @@ int config_setup_connection(server *srv, connection *con) {
 	PATCH(max_write_idle);
 	PATCH(use_xattr);
 	PATCH(error_handler);
+	PATCH(error_handler_410);
 	PATCH(errorfile_prefix);
 #ifdef HAVE_LSTAT
 	PATCH(follow_symlink);
@@ -361,6 +365,8 @@ int config_patch_connection(server *srv, connection *con, comp_key_t comp) {
 				PATCH(range_requests);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("server.error-handler-404"))) {
 				PATCH(error_handler);
+			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("server.error-handler-410"))) {
+				PATCH(error_handler_410);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("server.errorfile-prefix"))) {
 				PATCH(errorfile_prefix);
 			} else if (buffer_is_equal_string(du->key, CONST_STR_LEN("mimetype.assign"))) {

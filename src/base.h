@@ -248,6 +248,7 @@ typedef struct {
 	buffer *document_root;
 	buffer *server_name;
 	buffer *error_handler;
+	buffer *error_handler_410;
 	buffer *server_tag;
 	buffer *dirlist_encoding;
 	buffer *errorfile_prefix;
@@ -428,6 +429,11 @@ typedef struct {
 	buffer *error_handler;
 	int error_handler_saved_status;
 	int in_error_handler;
+
+	/* error-handler-hst */
+	buffer *error_handler_410;
+	int error_handler_410_saved_status;
+	int in_error_handler_410;
 
 	void *srv_socket;   /* reference to the server-socket (typecast to server_socket) */
 
