@@ -2390,6 +2390,11 @@ range_success: ;
 				if (con->response.content_length < 0) con->response.content_length = 0;
 			}
 			break;
+		case 28:
+			if (0 == strncasecmp(key, "X-LIGHTTPD-KBytes-per-second", key_len)) {
+				con->conf.kbytes_per_second = strtol(value, NULL, 10);
+			}
+			break;
 		default:
 			break;
 		}
