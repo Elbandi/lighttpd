@@ -13,7 +13,10 @@ debian/tmp/usr/lib/lighttpd/mod_expire.so
 debian/tmp/usr/lib/lighttpd/mod_extforward.so
 debian/tmp/usr/lib/lighttpd/mod_fastcgi.so
 debian/tmp/usr/lib/lighttpd/mod_flv_streaming.so
+debian/tmp/usr/lib/lighttpd/mod_geoip.so
 debian/tmp/usr/lib/lighttpd/mod_indexfile.so
+debian/tmp/usr/lib/lighttpd/mod_mem_cache.so
+debian/tmp/usr/lib/lighttpd/mod_mem_compress.so
 debian/tmp/usr/lib/lighttpd/mod_proxy.so
 debian/tmp/usr/lib/lighttpd/mod_redirect.so
 debian/tmp/usr/lib/lighttpd/mod_rewrite.so
